@@ -1,0 +1,53 @@
+services:
+  database:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: eaglepoint
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: app_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app_user -d eaglepoint"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgresql://app_user:app_password@database:5432/eaglepoint
+      CORS_ORIGIN: http://localhost:4200
+      JWT_SECRET: change_this_to_a_secure_minimum_32_character_value
+    depends_on:
+      database:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - cms_storage:/app/storage/private
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "4200:4200"
+
+volumes:
+  postgres_data:
+  cms_storage:

@@ -1,0 +1,91 @@
+# Node.js dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+out/
+build/
+coverage/
+tmp/
+temp/
+*.tsbuildinfo
+
+# Angular outputs and caches
+.angular/
+.cache/
+frontend/.angular/
+frontend/dist/
+frontend/out/
+frontend/.cache/
+
+# Backend outputs
+backend/dist/
+backend/out/
+backend/coverage/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment files
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Runtime and process files
+*.pid
+*.pid.lock
+*.seed
+*.out
+*.err
+
+# Database binaries, dumps, and local data
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.sql.gz
+*.dump
+*.bak
+*.backup
+postgres_data/
+**/postgres_data/
+database/data/
+database/backups/
+backups/
+
+# Uploaded/generated file storage
+storage/
+uploads/
+
+# Docker overrides and local compose files
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*.orig
+
+# OS-specific hidden files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.Spotlight-V100/
+.Trashes/

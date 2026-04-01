@@ -1,0 +1,193 @@
+import Fastify from "fastify";
+import jwt from "@fastify/jwt";
+import sensible from "@fastify/sensible";
+import type { Pool } from "pg";
+import { describe, expect, it } from "vitest";
+
+import moderationRankingRoutes from "../src/routes/moderation-ranking.js";
+
+describe("moderation and ranking routes", () => {
+  const buildApp = async (role: "admin" | "reviewer" = "admin") => {
+    const app = Fastify();
+    await app.register(sensible);
+    await app.register(jwt, { secret: "test-secret-test-secret-test-secret" });
+    app.decorate("env", {
+      HOST: "0.0.0.0",
+      PORT: 3000,
+      NODE_ENV: "test",
+      DATABASE_URL: "https://example.com",
+      CORS_ORIGIN: "*",
+      JWT_SECRET: "test-secret-test-secret-test-secret",
+    });
+
+    let commentStatus: "pending" | "approved" | "blocked" = "pending";
+    let pinned = false;
+
+    const queryFn = async <T>(text: string, values?: unknown[]) => {
+      if (text.includes("SELECT s.id AS session_id")) {
+        return {
+          rows: [
+            {
+              session_id: 1,
+              user_id: 1,
+              username: "reviewer",
+              role,
+            },
+          ] as T[],
+        };
+      }
+
+      if (text.includes("INSERT INTO app.comments")) {
+        commentStatus = "pending";
+        pinned = false;
+      }
+
+      if (text.includes("status = 'approved'")) {
+        commentStatus = "approved";
+      }
+
+      if (text.includes("status = 'blocked'")) {
+        commentStatus = "blocked";
+        pinned = false;
+      }
+
+      if (text.includes("SET\n            pinned")) {
+        pinned = Boolean(values?.[1]);
+      }
+
+      if (text.includes("INSERT INTO app.rankings")) {
+        return {
+          rows: [
+            {
+              id: 1,
+              subject_key: "project-a",
+              benchmark_value: 90,
+              price_value: 80,
+              volatility_value: 70,
+              benchmark_weight: 40,
+              price_weight: 30,
+              volatility_weight: 30,
+              score: 81,
+              created_by_user_id: 1,
+              created_at: new Date(),
+            },
+          ] as T[],
+        };
+      }
+
+      if (
+        text.includes("UPDATE app.comments") ||
+        text.includes("INSERT INTO app.comments")
+      ) {
+        return {
+          rows: [
+            {
+              id: 1,
+              content_id: null,
+              body: "body",
+              status: commentStatus,
+              pinned,
+              created_by_user_id: 1,
+              moderated_by_user_id: 1,
+              moderation_note: null,
+              moderated_at: new Date(),
+              created_at: new Date(),
+              updated_at: new Date(),
+            },
+          ] as T[],
+        };
+      }
+
+      return { rows: [] as T[] };
+    };
+
+    app.decorate("db", {
+      query: queryFn,
+      connect: async () =>
+        ({ query: queryFn, release: () => undefined }) as never,
+    } as unknown as Pool);
+
+    await app.register(moderationRankingRoutes, { prefix: "/api" });
+    return app;
+  };
+
+  const headers = (token: string) => ({
+    authorization: `Bearer ${token}`,
+    "x-nonce": `nonce-${Math.random().toString(36).slice(2)}-1234567890`,
+    "x-timestamp": String(Date.now()),
+  });
+
+  it("accepts valid weights summing to 100 and computes score", async () => {
+    const app = await buildApp("admin");
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/rankings/score",
+      headers: headers(token),
+      payload: {
+        subjectKey: "project-a",
+        benchmark: 90,
+        price: 80,
+        volatility: 70,
+        weights: { benchmark: 40, price: 30, volatility: 30 },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().score).toBe(81);
+  });
+
+  it("rejects weights not summing to 100", async () => {
+    const app = await buildApp("admin");
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/rankings/score",
+      headers: headers(token),
+      payload: {
+        subjectKey: "project-a",
+        benchmark: 90,
+        price: 80,
+        volatility: 70,
+        weights: { benchmark: 40, price: 30, volatility: 20 },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("comment moderation lifecycle", async () => {
+    const app = await buildApp("reviewer");
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/moderation/comments",
+      headers: headers(token),
+      payload: { body: "comment" },
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json().status).toBe("pending");
+
+    const approved = await app.inject({
+      method: "POST",
+      url: "/api/moderation/comments/1/approve",
+      headers: headers(token),
+      payload: {},
+    });
+    expect(approved.statusCode).toBe(200);
+    expect(approved.json().status).toBe("approved");
+
+    const blocked = await app.inject({
+      method: "POST",
+      url: "/api/moderation/comments/1/block",
+      headers: headers(token),
+      payload: {},
+    });
+    expect(blocked.statusCode).toBe(200);
+    expect(blocked.json().status).toBe("blocked");
+    expect(blocked.json().pinned).toBe(false);
+  });
+});
