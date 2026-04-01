@@ -10,10 +10,10 @@ UNIT_EXIT=0
 API_EXIT=0
 
 echo "Running unit tests (backend/unit_tests)..."
-npx vitest run --root backend "unit_tests/**/*.test.ts" --reporter=json --outputFile "$UNIT_REPORT" || UNIT_EXIT=$?
+npm run test --workspace backend -- unit_tests --reporter=json --outputFile "$SCRIPT_DIR/$UNIT_REPORT" || UNIT_EXIT=$?
 
 echo "Running API tests (backend/API_tests)..."
-npx vitest run --root backend "API_tests/**/*.test.ts" --reporter=json --outputFile "$API_REPORT" || API_EXIT=$?
+npm run test --workspace backend -- API_tests --reporter=json --outputFile "$SCRIPT_DIR/$API_REPORT" || API_EXIT=$?
 
 SUMMARY=$(node -e '
 const fs = require("node:fs");

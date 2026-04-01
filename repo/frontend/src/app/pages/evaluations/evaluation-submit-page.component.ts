@@ -1,6 +1,12 @@
 import { CommonModule } from "@angular/common";
 import { Component } from "@angular/core";
-import { FormBuilder, ReactiveFormsModule, Validators } from "@angular/forms";
+import {
+  FormBuilder,
+  FormControl,
+  FormGroup,
+  ReactiveFormsModule,
+  Validators,
+} from "@angular/forms";
 
 import { ApiService } from "../../services/api.service";
 
@@ -10,6 +16,8 @@ type Question = {
   type: "numeric_scale" | "comment";
   required: boolean;
 };
+
+type ResponseControls = Record<string, FormControl<string | null>>;
 
 @Component({
   selector: "app-evaluation-submit-page",
@@ -63,7 +71,7 @@ type Question = {
 })
 export class EvaluationSubmitPageComponent {
   protected readonly formIdForm;
-  protected readonly responseForm;
+  protected readonly responseForm: FormGroup<ResponseControls>;
   protected questions: Question[] = [];
   protected error = "";
   protected receiptId = "";
@@ -76,7 +84,7 @@ export class EvaluationSubmitPageComponent {
       formId: ["", [Validators.required]],
     });
 
-    this.responseForm = this.fb.group({});
+    this.responseForm = this.fb.group<ResponseControls>({});
   }
 
   protected loadForm(): void {
