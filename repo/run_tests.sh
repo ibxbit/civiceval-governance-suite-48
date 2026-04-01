@@ -9,11 +9,14 @@ API_REPORT=".vitest-api.json"
 UNIT_EXIT=0
 API_EXIT=0
 
+echo "Installing backend test dependencies..."
+npm install --workspace backend --include=dev
+
 echo "Running unit tests (backend/unit_tests)..."
-npm run test --workspace backend -- unit_tests --reporter=json --outputFile "$SCRIPT_DIR/$UNIT_REPORT" || UNIT_EXIT=$?
+npm exec --workspace backend -- vitest run unit_tests --reporter=json --outputFile "$SCRIPT_DIR/$UNIT_REPORT" || UNIT_EXIT=$?
 
 echo "Running API tests (backend/API_tests)..."
-npm run test --workspace backend -- API_tests --reporter=json --outputFile "$SCRIPT_DIR/$API_REPORT" || API_EXIT=$?
+npm exec --workspace backend -- vitest run API_tests --reporter=json --outputFile "$SCRIPT_DIR/$API_REPORT" || API_EXIT=$?
 
 SUMMARY=$(node -e '
 const fs = require("node:fs");
