@@ -13,11 +13,21 @@ import { z } from "zod";
 import { authGuard } from "../middleware/auth.js";
 import { logAuditEvent } from "../middleware/audit.js";
 import { nonceGuard } from "../middleware/nonce.js";
+import { searchRateLimitConfig } from "../middleware/rate-limit.js";
 import { roleGuard } from "../middleware/role.js";
 
 const MAX_FILE_SIZE = 250 * 1024 * 1024;
 const MAX_LINK_DAYS = 7;
 const STORAGE_ROOT = join(process.cwd(), "storage", "private");
+const SENSITIVE_TERMS_CACHE_TTL_MS = 60_000;
+
+const defaultSensitiveWords = [
+  "password",
+  "ssn",
+  "credit card",
+  "secret",
+  "api key",
+];
 
 const allowedMimeTypes = new Set([
   "image/jpeg",
@@ -29,8 +39,6 @@ const allowedMimeTypes = new Set([
   "video/quicktime",
   "application/pdf",
 ]);
-
-const sensitiveWords = ["password", "ssn", "credit card", "secret", "api key"];
 
 const createContentSchema = z.object({
   title: z.string().trim().min(1).max(200),
@@ -77,6 +85,16 @@ const accessTokenSchema = z.object({
   purpose: z.literal("cms-file-access"),
 });
 
+const sensitiveWordSearchSchema = z.object({
+  q: z.string().trim().min(1).max(120),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+const sensitiveWordPolicySchema = z.object({
+  words: z.array(z.string().trim().min(1).max(80)).min(1).max(500),
+});
+
 type FileRow = {
   id: number;
   original_name: string;
@@ -116,8 +134,19 @@ type VersionRow = {
   created_at: Date;
 };
 
+type SensitiveTermRow = {
+  term: string;
+};
+
+type SensitiveTermsCache = {
+  words: string[];
+  loadedAt: number;
+};
+
 const cmsRoutes: FastifyPluginAsync = async (fastify) => {
   await mkdir(STORAGE_ROOT, { recursive: true });
+
+  let sensitiveTermsCache: SensitiveTermsCache | null = null;
 
   await fastify.register(multipart, {
     limits: {
@@ -127,7 +156,177 @@ const cmsRoutes: FastifyPluginAsync = async (fastify) => {
     },
   });
 
-  fastify.get("/cms/content", { preHandler: [authGuard] }, async (request) => {
+  fastify.get(
+    "/cms/content/search",
+    {
+      preHandler: [authGuard, nonceGuard],
+      ...searchRateLimitConfig,
+    },
+    async (request) => {
+      const query = sensitiveWordSearchSchema.safeParse(request.query);
+      if (!query.success) {
+        throw fastify.httpErrors.badRequest("Invalid content search query");
+      }
+
+      const offset = (query.data.page - 1) * query.data.limit;
+      const wildcard = `%${query.data.q}%`;
+
+      const dataResult = await fastify.db.query<ContentRow>(
+        `
+          SELECT
+            id,
+            title,
+            rich_text,
+            status,
+            file_ids,
+            version_number,
+            created_by_user_id,
+            updated_by_user_id,
+            published_at,
+            created_at,
+            updated_at
+          FROM app.cms_content
+          WHERE archived_at IS NULL
+            AND (title ILIKE $1 OR rich_text ILIKE $1)
+          ORDER BY updated_at DESC, id DESC
+          LIMIT $2 OFFSET $3
+        `,
+        [wildcard, query.data.limit, offset],
+      );
+
+      const totalResult = await fastify.db.query<{ total: string }>(
+        `
+          SELECT COUNT(*)::text AS total
+          FROM app.cms_content
+          WHERE archived_at IS NULL
+            AND (title ILIKE $1 OR rich_text ILIKE $1)
+        `,
+        [wildcard],
+      );
+
+      return {
+        data: dataResult.rows.map(mapContent),
+        total: Number(totalResult.rows[0]?.total ?? "0"),
+        page: query.data.page,
+        limit: query.data.limit,
+        query: query.data.q,
+      };
+    },
+  );
+
+  fastify.get(
+    "/cms/policy/sensitive-words",
+    { preHandler: [authGuard, roleGuard("admin"), nonceGuard] },
+    async () => {
+      const words = await getSensitiveWords(fastify, sensitiveTermsCache);
+      sensitiveTermsCache = {
+        words,
+        loadedAt: Date.now(),
+      };
+
+      return {
+        words,
+      };
+    },
+  );
+
+  fastify.post(
+    "/cms/policy/sensitive-words/reload",
+    {
+      preHandler: [authGuard, roleGuard("admin"), nonceGuard],
+    },
+    async () => {
+      sensitiveTermsCache = null;
+      const words = await getSensitiveWords(fastify, sensitiveTermsCache, true);
+      sensitiveTermsCache = {
+        words,
+        loadedAt: Date.now(),
+      };
+
+      return {
+        words,
+        refreshed: true,
+      };
+    },
+  );
+
+  fastify.put(
+    "/cms/policy/sensitive-words",
+    {
+      preHandler: [authGuard, roleGuard("admin"), nonceGuard],
+    },
+    async (request) => {
+      const parsed = sensitiveWordPolicySchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw fastify.httpErrors.badRequest(
+          "Invalid sensitive words policy payload",
+        );
+      }
+
+      const normalized = normalizeSensitiveWords(parsed.data.words);
+      if (normalized.length === 0) {
+        throw fastify.httpErrors.badRequest(
+          "Sensitive words policy cannot be empty",
+        );
+      }
+
+      const client = await fastify.db.connect();
+      try {
+        await client.query("BEGIN");
+
+        await client.query(
+          `
+            UPDATE app.cms_sensitive_terms
+            SET is_active = FALSE,
+                updated_by_user_id = $1,
+                updated_at = NOW()
+          `,
+          [request.auth.userId],
+        );
+
+        for (const word of normalized) {
+          await client.query(
+            `
+              INSERT INTO app.cms_sensitive_terms (
+                term,
+                is_active,
+                created_by_user_id,
+                updated_by_user_id
+              )
+              VALUES ($1, TRUE, $2, $2)
+              ON CONFLICT (term)
+              DO UPDATE
+              SET is_active = TRUE,
+                  updated_by_user_id = EXCLUDED.updated_by_user_id,
+                  updated_at = NOW()
+            `,
+            [word, request.auth.userId],
+          );
+        }
+
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
+
+      sensitiveTermsCache = {
+        words: normalized,
+        loadedAt: Date.now(),
+      };
+
+      return {
+        words: normalized,
+      };
+    },
+  );
+
+  fastify.get(
+    "/cms/content",
+    { preHandler: [authGuard, nonceGuard] },
+    async (request) => {
     const query = contentListQuerySchema.safeParse(request.query);
     if (!query.success) {
       throw fastify.httpErrors.badRequest("Invalid content list query");
@@ -183,11 +382,12 @@ const cmsRoutes: FastifyPluginAsync = async (fastify) => {
       page: query.data.page,
       limit: query.data.limit,
     };
-  });
+    },
+  );
 
   fastify.get(
     "/cms/content/:contentId",
-    { preHandler: [authGuard] },
+    { preHandler: [authGuard, nonceGuard] },
     async (request) => {
       const params = contentIdParamsSchema.safeParse(request.params);
       if (!params.success) {
@@ -448,7 +648,16 @@ const cmsRoutes: FastifyPluginAsync = async (fastify) => {
         throw fastify.httpErrors.badRequest("Invalid content payload");
       }
 
-      validateSensitiveText(parsed.data.title, parsed.data.richText, fastify);
+      await validateSensitiveText(
+        parsed.data.title,
+        parsed.data.richText,
+        fastify,
+        sensitiveTermsCache,
+      );
+      sensitiveTermsCache = {
+        words: await getSensitiveWords(fastify, sensitiveTermsCache),
+        loadedAt: Date.now(),
+      };
       const validatedFileIds = await validateFileIds(
         parsed.data.fileIds ?? [],
         fastify,
@@ -589,7 +798,16 @@ const cmsRoutes: FastifyPluginAsync = async (fastify) => {
 
         const nextTitle = parsed.data.title ?? existing.title;
         const nextRichText = parsed.data.richText ?? existing.rich_text;
-        validateSensitiveText(nextTitle, nextRichText, fastify);
+        await validateSensitiveText(
+          nextTitle,
+          nextRichText,
+          fastify,
+          sensitiveTermsCache,
+        );
+        sensitiveTermsCache = {
+          words: await getSensitiveWords(fastify, sensitiveTermsCache),
+          loadedAt: Date.now(),
+        };
 
         const nextFileIds =
           parsed.data.fileIds !== undefined
@@ -716,6 +934,17 @@ const cmsRoutes: FastifyPluginAsync = async (fastify) => {
         if (existing.status === "published") {
           throw fastify.httpErrors.badRequest("Content is already published");
         }
+
+        await validateSensitiveText(
+          existing.title,
+          existing.rich_text,
+          fastify,
+          sensitiveTermsCache,
+        );
+        sensitiveTermsCache = {
+          words: await getSensitiveWords(fastify, sensitiveTermsCache),
+          loadedAt: Date.now(),
+        };
 
         const nextVersionNumber = existing.version_number + 1;
         const publishedResult = await client.query<ContentRow>(
@@ -864,7 +1093,16 @@ const cmsRoutes: FastifyPluginAsync = async (fastify) => {
           throw fastify.httpErrors.notFound("Version not found");
         }
 
-        validateSensitiveText(source.title, source.rich_text, fastify);
+        await validateSensitiveText(
+          source.title,
+          source.rich_text,
+          fastify,
+          sensitiveTermsCache,
+        );
+        sensitiveTermsCache = {
+          words: await getSensitiveWords(fastify, sensitiveTermsCache),
+          loadedAt: Date.now(),
+        };
 
         const nextVersionNumber = current.version_number + 1;
 
@@ -955,7 +1193,7 @@ const cmsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get(
     "/cms/content/:contentId/versions",
-    { preHandler: [authGuard] },
+    { preHandler: [authGuard, nonceGuard] },
     async (request) => {
       const params = contentIdParamsSchema.safeParse(request.params);
       if (!params.success) {
@@ -1012,18 +1250,60 @@ const mapContent = (content: ContentRow) => ({
   updatedAt: content.updated_at,
 });
 
-const validateSensitiveText = (
+const validateSensitiveText = async (
   title: string,
   richText: string,
   fastify: FastifyInstance,
-): void => {
+  cache: SensitiveTermsCache | null,
+): Promise<void> => {
   const normalized = `${title} ${richText}`.toLowerCase();
-  for (const word of sensitiveWords) {
+  const words = await getSensitiveWords(fastify, cache);
+  for (const word of words) {
     if (normalized.includes(word)) {
       throw fastify.httpErrors.badRequest("Content contains blocked terms");
     }
   }
 };
+
+const getSensitiveWords = async (
+  fastify: FastifyInstance,
+  cache: SensitiveTermsCache | null,
+  forceRefresh = false,
+): Promise<string[]> => {
+  if (
+    !forceRefresh &&
+    cache &&
+    Date.now() - cache.loadedAt < SENSITIVE_TERMS_CACHE_TTL_MS
+  ) {
+    return cache.words;
+  }
+
+  const result = await fastify.db.query<SensitiveTermRow>(
+    `
+      SELECT term
+      FROM app.cms_sensitive_terms
+      WHERE is_active = TRUE
+      ORDER BY term ASC
+    `,
+  );
+
+  const words = normalizeSensitiveWords(
+    result.rows.length > 0
+      ? result.rows.map((row) => row.term)
+      : defaultSensitiveWords,
+  );
+
+  return words;
+};
+
+const normalizeSensitiveWords = (words: string[]): string[] =>
+  Array.from(
+    new Set(
+      words
+        .map((word) => word.trim().toLowerCase())
+        .filter((word) => word.length > 0),
+    ),
+  );
 
 const validateFileIds = async (
   fileIds: number[],

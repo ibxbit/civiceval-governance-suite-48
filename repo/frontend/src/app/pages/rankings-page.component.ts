@@ -56,6 +56,8 @@ type RankingItem = {
           formControlName="volatilityWeight"
         />
         <p class="error" *ngIf="weightError">{{ weightError }}</p>
+        <p class="error" *ngIf="submitError">{{ submitError }}</p>
+        <p *ngIf="submitSuccess">{{ submitSuccess }}</p>
         <button type="submit">Score New Project</button>
       </form>
 
@@ -75,6 +77,8 @@ export class RankingsPageComponent {
   protected rankings: RankingItem[] = [];
   protected isLoading = false;
   protected expandedId: number | null = null;
+  protected submitError = "";
+  protected submitSuccess = "";
 
   protected readonly form;
 
@@ -122,7 +126,10 @@ export class RankingsPageComponent {
   }
 
   protected submit(): void {
+    this.submitError = "";
+    this.submitSuccess = "";
     if (this.form.invalid || this.weightSum() !== 100) {
+      this.submitError = "Provide valid values and ensure weights sum to 100.";
       return;
     }
 
@@ -140,7 +147,11 @@ export class RankingsPageComponent {
       })
       .subscribe({
         next: () => {
+          this.submitSuccess = "Ranking submitted.";
           this.load();
+        },
+        error: () => {
+          this.submitError = "Failed to submit ranking.";
         },
       });
   }

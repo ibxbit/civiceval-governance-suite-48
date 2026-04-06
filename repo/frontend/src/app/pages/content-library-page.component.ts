@@ -28,6 +28,10 @@ type ContentItem = {
   template: `
     <section class="page">
       <h1>Content Library</h1>
+      <p>
+        Asset downloads are watermarked by backend '/cms/files/access/:token'.
+        Expiring links default to 7 days.
+      </p>
 
       <app-content-create-form
         [form]="form"
@@ -54,6 +58,26 @@ type ContentItem = {
         (save)="saveSelected()"
         (rollback)="rollback($event)"
       />
+
+      <section class="panel">
+        <h2>Secure Asset Link</h2>
+        <p>
+          Generate a temporary link for protected assets. Default expiry is 7 days.
+        </p>
+        <form [formGroup]="shareForm" (ngSubmit)="createAssetLink()">
+          <input type="number" min="1" placeholder="File ID" formControlName="fileId" />
+          <input
+            type="number"
+            min="1"
+            max="7"
+            placeholder="Expires in days"
+            formControlName="expiresInDays"
+          />
+          <button type="submit">Generate Link</button>
+        </form>
+        <p class="error" *ngIf="shareError">{{ shareError }}</p>
+        <p *ngIf="shareLink">Link: {{ shareLink }}</p>
+      </section>
     </section>
   `,
 })
@@ -65,6 +89,9 @@ export class ContentLibraryPageComponent {
   protected uploadedFileIds: number[] = [];
   protected isLoading = false;
   protected error = "";
+  protected readonly shareForm;
+  protected shareLink = "";
+  protected shareError = "";
 
   public constructor(
     private readonly api: ApiService,
@@ -74,6 +101,10 @@ export class ContentLibraryPageComponent {
       title: ["", [Validators.required]],
       richText: ["", [Validators.required]],
       fileIdsRaw: [""],
+    });
+    this.shareForm = this.fb.group({
+      fileId: ["", [Validators.required]],
+      expiresInDays: [7, [Validators.required, Validators.min(1), Validators.max(7)]],
     });
     this.load();
   }
@@ -95,7 +126,9 @@ export class ContentLibraryPageComponent {
   }
 
   protected create(): void {
+    this.error = "";
     if (this.form.invalid) {
+      this.error = "Title and content are required.";
       return;
     }
 
@@ -119,6 +152,9 @@ export class ContentLibraryPageComponent {
           this.uploadedFileIds = [];
           this.load();
         },
+        error: () => {
+          this.error = "Failed to create content.";
+        },
       });
   }
 
@@ -135,6 +171,9 @@ export class ContentLibraryPageComponent {
       next: (response: { id: number }) => {
         this.uploadedFileIds = [...this.uploadedFileIds, response.id];
       },
+      error: () => {
+        this.error = "File upload failed.";
+      },
     });
   }
 
@@ -145,6 +184,9 @@ export class ContentLibraryPageComponent {
       next: (response: { id: number }) => {
         this.uploadedFileIds = [...this.uploadedFileIds, response.id];
       },
+      error: () => {
+        this.error = "Dropped file upload failed.";
+      },
     });
   }
 
@@ -153,6 +195,9 @@ export class ContentLibraryPageComponent {
       next: (content: ContentItem) => {
         this.selected = content;
         this.loadVersions(contentId);
+      },
+      error: () => {
+        this.error = "Failed to open content.";
       },
     });
   }
@@ -205,6 +250,9 @@ export class ContentLibraryPageComponent {
           this.open(this.selected!.id);
           this.load();
         },
+        error: () => {
+          this.error = "Failed to save content.";
+        },
       });
   }
 
@@ -218,6 +266,9 @@ export class ContentLibraryPageComponent {
           versions: Array<{ versionNumber: number; action: string }>;
         }) => {
           this.versions = response.versions;
+        },
+        error: () => {
+          this.error = "Failed to load versions.";
         },
       });
   }
@@ -234,6 +285,34 @@ export class ContentLibraryPageComponent {
           this.open(this.selected!.id);
           this.load();
         },
+        error: () => {
+          this.error = "Rollback failed.";
+        },
       });
+  }
+
+  protected createAssetLink(): void {
+    this.shareError = "";
+    this.shareLink = "";
+    if (this.shareForm.invalid) {
+      this.shareError = "Provide valid file id and expiry days (1-7).";
+      return;
+    }
+
+    const fileId = Number(this.shareForm.controls.fileId.value);
+    const expiresInDays = Number(this.shareForm.controls.expiresInDays.value);
+
+    this.api
+      .post<{ token: string }>(`/cms/files/${fileId}/link`, { expiresInDays })
+      .subscribe({
+        next: (response: { token: string }) => {
+          this.shareLink = `${window.location.origin}/api/cms/files/access/${response.token}`;
+        },
+        error: () => {
+          this.shareError = "Failed to generate secure link.";
+        },
+      });
+
+    // TODO(frontend-boundary): Link revocation history and watermark evidence are audited server-side only.
   }
 }

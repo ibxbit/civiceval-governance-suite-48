@@ -1,9 +1,15 @@
 # Backend Test Verification
 
-Official backend verification now runs through:
+From repository root, official backend verification runs through:
 
 ```bash
 sh run_tests.sh
+```
+
+From `backend/` folder, run:
+
+```bash
+npm test
 ```
 
 What this does:
@@ -12,7 +18,7 @@ What this does:
 2. Runs API integration tests in `backend/API_tests/`.
 3. Prints a final summary with `Total Tests`, `Passed`, and `Failed`.
 
-Equivalent npm command:
+Equivalent root-level npm command:
 
 ```bash
 npm run test:all

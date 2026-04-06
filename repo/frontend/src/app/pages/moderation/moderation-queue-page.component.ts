@@ -18,6 +18,21 @@ type ModerationReport = {
   details: string | null;
 };
 
+type ModerationQna = {
+  id: number;
+  questionText: string;
+  answerText: string | null;
+  status: "pending" | "approved" | "blocked";
+  pinned: boolean;
+};
+
+type ModerationQnaReport = {
+  id: number;
+  qnaId: number;
+  reason: string;
+  details: string | null;
+};
+
 type UnrecognizedLoginEvent = {
   id: number;
   username: string;
@@ -34,6 +49,7 @@ type UnrecognizedLoginEvent = {
   template: `
     <section class="page">
       <h1>Moderation Queue</h1>
+      <p *ngIf="errorMessage" class="error">{{ errorMessage }}</p>
 
       <section class="panel">
         <h2>Comments</h2>
@@ -71,6 +87,41 @@ type UnrecognizedLoginEvent = {
         </article>
       </section>
 
+      <section class="panel">
+        <h2>Q&A Queue</h2>
+        <p *ngIf="qnaEntries.length === 0">No Q&A in queue.</p>
+        <article *ngFor="let qna of qnaEntries" class="panel">
+          <p>{{ qna.questionText }}</p>
+          <small *ngIf="qna.answerText">Answer: {{ qna.answerText }}</small>
+          <small>Status: {{ qna.status }} | Pinned: {{ qna.pinned }}</small>
+          <div>
+            <button type="button" (click)="approveQna(qna.id)">Approve</button>
+            <button type="button" (click)="pinQna(qna.id)">Pin</button>
+            <button type="button" (click)="blockQna(qna.id)">Block</button>
+          </div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <h2>Open Q&A Reports</h2>
+        <p *ngIf="qnaReports.length === 0">No open Q&A reports.</p>
+        <article *ngFor="let report of qnaReports" class="panel">
+          <p>Q&A #{{ report.qnaId }}: {{ report.reason }}</p>
+          <small *ngIf="report.details">{{ report.details }}</small>
+          <div>
+            <button type="button" (click)="handleQnaReport(report.id, 'approve')">
+              Approve
+            </button>
+            <button type="button" (click)="handleQnaReport(report.id, 'block')">
+              Block
+            </button>
+            <button type="button" (click)="handleQnaReport(report.id, 'dismiss')">
+              Dismiss
+            </button>
+          </div>
+        </article>
+      </section>
+
       <section class="panel" *ngIf="isAdmin">
         <h2>Unrecognized Login Events</h2>
         <p *ngIf="loginEvents.length === 0">No unreviewed events.</p>
@@ -91,8 +142,11 @@ type UnrecognizedLoginEvent = {
 export class ModerationQueuePageComponent {
   protected comments: ModerationComment[] = [];
   protected reports: ModerationReport[] = [];
+  protected qnaEntries: ModerationQna[] = [];
+  protected qnaReports: ModerationQnaReport[] = [];
   protected loginEvents: UnrecognizedLoginEvent[] = [];
   protected readonly isAdmin: boolean;
+  protected errorMessage = "";
 
   public constructor(
     private readonly api: ApiService,
@@ -101,12 +155,15 @@ export class ModerationQueuePageComponent {
     this.isAdmin = this.auth.getCurrentUserSnapshot()?.role === "admin";
     this.loadComments();
     this.loadReports();
+    this.loadQna();
+    this.loadQnaReports();
     if (this.isAdmin) {
       this.loadLoginEvents();
     }
   }
 
   protected loadComments(): void {
+    this.errorMessage = "";
     this.api
       .get<{ data: ModerationComment[] }>("/moderation/comments", {
         page: 1,
@@ -117,10 +174,15 @@ export class ModerationQueuePageComponent {
         next: (response: { data: ModerationComment[] }) => {
           this.comments = response.data;
         },
+        error: () => {
+          this.comments = [];
+          this.errorMessage = "Failed to load moderation comments.";
+        },
       });
   }
 
   protected loadReports(): void {
+    this.errorMessage = "";
     this.api
       .get<{ data: ModerationReport[] }>("/moderation/reports", {
         page: 1,
@@ -130,25 +192,79 @@ export class ModerationQueuePageComponent {
         next: (response: { data: ModerationReport[] }) => {
           this.reports = response.data;
         },
+        error: () => {
+          this.reports = [];
+          this.errorMessage = "Failed to load moderation reports.";
+        },
+      });
+  }
+
+  protected loadQna(): void {
+    this.api
+      .get<{ data: ModerationQna[] }>("/moderation/qna", {
+        page: 1,
+        limit: 20,
+        status: "pending",
+      })
+      .subscribe({
+        next: (response: { data: ModerationQna[] }) => {
+          this.qnaEntries = response.data;
+        },
+        error: () => {
+          this.qnaEntries = [];
+          this.errorMessage = "Failed to load moderation Q&A.";
+        },
+      });
+  }
+
+  protected loadQnaReports(): void {
+    this.api
+      .get<{ data: ModerationQnaReport[] }>("/moderation/qna/reports", {
+        page: 1,
+        limit: 20,
+      })
+      .subscribe({
+        next: (response: { data: ModerationQnaReport[] }) => {
+          this.qnaReports = response.data;
+        },
+        error: () => {
+          this.qnaReports = [];
+          this.errorMessage = "Failed to load moderation Q&A reports.";
+        },
       });
   }
 
   protected approve(commentId: number): void {
     this.api
       .post(`/moderation/comments/${commentId}/approve`)
-      .subscribe({ next: () => this.loadComments() });
+      .subscribe({
+        next: () => this.loadComments(),
+        error: () => {
+          this.errorMessage = "Approve action failed.";
+        },
+      });
   }
 
   protected pin(commentId: number): void {
     this.api
       .post(`/moderation/comments/${commentId}/pin`, { pinned: true })
-      .subscribe({ next: () => this.loadComments() });
+      .subscribe({
+        next: () => this.loadComments(),
+        error: () => {
+          this.errorMessage = "Pin action failed.";
+        },
+      });
   }
 
   protected block(commentId: number): void {
     this.api
       .post(`/moderation/comments/${commentId}/block`)
-      .subscribe({ next: () => this.loadComments() });
+      .subscribe({
+        next: () => this.loadComments(),
+        error: () => {
+          this.errorMessage = "Block action failed.";
+        },
+      });
   }
 
   protected handleReport(
@@ -161,6 +277,53 @@ export class ModerationQueuePageComponent {
         next: () => {
           this.loadComments();
           this.loadReports();
+        },
+        error: () => {
+          this.errorMessage = "Report action failed.";
+        },
+      });
+  }
+
+  protected approveQna(qnaId: number): void {
+    this.api.post(`/moderation/qna/${qnaId}/approve`).subscribe({
+      next: () => this.loadQna(),
+      error: () => {
+        this.errorMessage = "Q&A approve action failed.";
+      },
+    });
+  }
+
+  protected pinQna(qnaId: number): void {
+    this.api.post(`/moderation/qna/${qnaId}/pin`, { pinned: true }).subscribe({
+      next: () => this.loadQna(),
+      error: () => {
+        this.errorMessage = "Q&A pin action failed.";
+      },
+    });
+  }
+
+  protected blockQna(qnaId: number): void {
+    this.api.post(`/moderation/qna/${qnaId}/block`).subscribe({
+      next: () => this.loadQna(),
+      error: () => {
+        this.errorMessage = "Q&A block action failed.";
+      },
+    });
+  }
+
+  protected handleQnaReport(
+    reportId: number,
+    action: "approve" | "block" | "dismiss",
+  ): void {
+    this.api
+      .post(`/moderation/qna/reports/${reportId}/handle`, { action })
+      .subscribe({
+        next: () => {
+          this.loadQna();
+          this.loadQnaReports();
+        },
+        error: () => {
+          this.errorMessage = "Q&A report action failed.";
         },
       });
   }

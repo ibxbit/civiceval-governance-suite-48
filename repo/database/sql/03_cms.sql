@@ -46,3 +46,27 @@ CREATE TABLE IF NOT EXISTS app.cms_content_versions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cms_content_versions_content_id ON app.cms_content_versions(content_id);
+
+CREATE TABLE IF NOT EXISTS app.cms_sensitive_terms (
+  id BIGSERIAL PRIMARY KEY,
+  term VARCHAR(80) NOT NULL UNIQUE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by_user_id BIGINT REFERENCES app.users(id) ON DELETE SET NULL,
+  updated_by_user_id BIGINT REFERENCES app.users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cms_sensitive_terms_active ON app.cms_sensitive_terms(is_active);
+
+INSERT INTO app.cms_sensitive_terms (term, is_active)
+VALUES
+  ('password', TRUE),
+  ('ssn', TRUE),
+  ('credit card', TRUE),
+  ('secret', TRUE),
+  ('api key', TRUE)
+ON CONFLICT (term)
+DO UPDATE
+SET is_active = EXCLUDED.is_active,
+    updated_at = NOW();

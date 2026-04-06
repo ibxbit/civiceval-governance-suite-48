@@ -1,150 +1,67 @@
 # Eaglepoint Platform
 
-## Project Overview
+Secure baseline uses TLS gateway (`https://localhost`) and encrypted bind mounts.
 
-CivicEval Governance Portal is a full-stack evaluation and governance system for managing activities, content workflows, moderation, scoring, and analytics.
+## Secure Startup
 
-Core features:
-
-- Role-based access control for admins, program owners, reviewers, and participants
-- Activity lifecycle, registrations, and one-time check-in flow
-- Evaluation forms with immutable submission receipts
-- CMS draft/publish/version rollback and private file storage
-- Moderation queues, report handling, weighted rankings, and analytics exports
-
-## Start Command
+1. Copy `.env.example` to `.env`.
+2. Set required values: `POSTGRES_PASSWORD`, `JWT_SECRET`, `ENCRYPTED_POSTGRES_PATH`, `ENCRYPTED_CMS_STORAGE_PATH`, `TLS_CERT_PATH`, `TLS_KEY_PATH`.
+3. Generate dev certs:
 
 ```bash
-docker compose up
+sh ops/tls/generate-dev-cert.sh
 ```
 
-## Service Addresses
-
-- Frontend: http://localhost:4200
-- Backend API: http://localhost:3000
-- PostgreSQL: localhost:5432
-  - Database: `eaglepoint`
-  - User: `app_user`
-  - Password: `app_password`
-
-## Role Descriptions
-
-- `admin`: full platform access including RBAC and moderation governance
-- `program_owner`: manages activities, content, rankings, analytics, and forms
-- `reviewer`: reviews participant content/comments and handles moderation reports
-- `participant`: registers/checks in to activities and submits evaluations
-
-## Seeded Admin Credentials
-
-- Username: `admin`
-- Password: `Admin@12345678`
-
-## API Endpoint Summary
-
-| Area        | Key Endpoints                                                                                                                                      |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth        | `/api/auth/register`, `/api/auth/login`, `/api/auth/me`, `/api/auth/logout`, `/api/auth/users/:userId/role`, `/api/auth/login-events/unrecognized` |
-| Activities  | `/api/activities`, `/api/activities/:activityId`, `/api/activities/:activityId/register`, `/api/activities/:activityId/checkin`                    |
-| CMS         | `/api/cms/content`, `/api/cms/content/:contentId`, `/api/cms/content/:contentId/publish`, `/api/cms/files/upload`                                  |
-| Evaluations | `/api/evaluations/forms`, `/api/evaluations/forms/:formId`, `/api/evaluations/forms/:formId/submissions`                                           |
-| Moderation  | `/api/moderation/comments`, `/api/moderation/reports`, `/api/moderation/reports/:reportId/handle`                                                  |
-| Rankings    | `/api/rankings/score`, `/api/rankings/latest`                                                                                                      |
-| Analytics   | `/api/analytics/events`, `/api/analytics/summary`, `/api/analytics/export.csv`                                                                     |
-
-## Local Development (Without Docker)
-
-1. Create backend env file from `backend/.env.example` and set:
-   - `DATABASE_URL`
-   - `JWT_SECRET`
-   - `PORT`, `HOST`, `CORS_ORIGIN`
-2. Start PostgreSQL locally and ensure database/user match your `DATABASE_URL`.
-3. Install dependencies:
+4. Start stack:
 
 ```bash
-npm install --workspace backend
-npm install --workspace frontend
+docker compose up --build
 ```
 
-4. Start backend:
+Default URLs:
+
+- Frontend + API: `https://localhost`
+- API health: `https://localhost/api/health`
+
+## Security Baseline Notes
+
+- HTTP (`:80`) is redirected to HTTPS (`:443`) at the gateway.
+- Backend and frontend are not directly exposed to host ports.
+- Compose requires host bind mounts for DB/CMS paths and they must be encrypted host paths.
+
+## Search and Analytics Flow
+
+- Search endpoint: `GET /api/activities/search?q=<term>&page=<n>&limit=<n>`.
+- Search route throttling: `20 requests/minute`.
+- Frontend analytics events posted to `/api/analytics/events`:
+  - `page_view`
+  - `dwell`
+  - `read_complete`
+  - `search`
+  - `search_click`
+
+## Seed Admin Credentials
+
+Admin seed is disabled by default.
+
+Optional non-production seed:
+
+- `ENABLE_SEED_ADMIN=true`
+- `SEED_ADMIN_PASSWORD_HASH=<precomputed_hash>`
+
+If hash is missing, seed is skipped.
+
+## Test and Build Commands
 
 ```bash
-npm run dev:backend
-```
-
-5. Start frontend:
-
-```bash
-npm run dev:frontend
-```
-
-## Verification Method
-
-1. Verify containers are running:
-
-```bash
-docker compose ps
-```
-
-2. Verify backend health endpoint:
-
-```bash
-curl http://localhost:3000/api/health
-```
-
-3. Verify frontend is reachable:
-
-```bash
-curl -I http://localhost:4200
-```
-
-4. Verify PostgreSQL is accepting connections:
-
-```bash
-docker compose exec database pg_isready -U app_user -d eaglepoint
-```
-
-## Test Instructions
-
-Official verification command from the repo root is `sh run_tests.sh` (or `npm run test:all`).
-
-```bash
-sh run_tests.sh
-npm run test:all
 npm test --workspace backend
 npm test --workspace frontend
+npm run build --workspace backend
+npm run build --workspace frontend
 ```
 
-## Data Governance
+## Backup and Restore Evidence
 
-- Canonical data dictionary: `database/data-dictionary.md`
-- Covers all `app.*` PostgreSQL tables, field definitions, data types, and validation constraints.
-
-## Encryption At Rest (Production)
-
-For production, mount database and CMS storage onto encrypted host paths.
-
-1. Enable host-level encryption (for example BitLocker on Windows or LUKS on Linux) for directories used by Docker bind mounts.
-2. Replace named volumes with encrypted bind mounts in a compose override file.
-
-Example `docker-compose.override.yml`:
-
-```yaml
-services:
-  database:
-    volumes:
-      - /secure/eaglepoint/postgres:/var/lib/postgresql/data
-      - ./database/sql:/docker-entrypoint-initdb.d:ro
-
-  backend:
-    volumes:
-      - /secure/eaglepoint/cms-storage:/app/storage/private
-```
-
-This keeps PostgreSQL data and CMS file objects encrypted at rest while preserving current runtime behavior.
-
-## Audit Retention (7 Years)
-
-- Run `npm run backup --workspace backend` on a schedule (daily recommended).
-- Script: `backend/scripts/backup.ts`
-- Rolling snapshots remain in `backups/<timestamp>` for 30 days.
-- Audit log archives are exported to `backups/7-year-retention/` and retained for 7 years.
+- Nightly backup schedule example: `ops/schedules/nightly-backup.cron`
+- Quarterly restore drill runbook: `ops/runbooks/restore-drill.md`
+- Backup implementation command: `npm run backup --workspace backend`

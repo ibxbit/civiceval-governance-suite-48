@@ -79,7 +79,7 @@ type SubmissionRow = {
 const evaluationsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     "/evaluations/forms",
-    { preHandler: [authGuard] },
+    { preHandler: [authGuard, nonceGuard] },
     async (request) => {
       const pagination = paginationSchema.safeParse(request.query);
       if (!pagination.success) {
@@ -218,7 +218,7 @@ const evaluationsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get(
     "/evaluations/forms/:formId",
-    { preHandler: [authGuard] },
+    { preHandler: [authGuard, nonceGuard] },
     async (request) => {
       const params = formIdParamsSchema.safeParse(request.params);
       if (!params.success) {
@@ -454,7 +454,7 @@ const evaluationsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get(
     "/evaluations/submissions/:receiptId",
-    { preHandler: [authGuard] },
+    { preHandler: [authGuard, nonceGuard] },
     async (request) => {
       const params = receiptParamsSchema.safeParse(request.params);
       if (!params.success) {
@@ -464,10 +464,11 @@ const evaluationsRoutes: FastifyPluginAsync = async (fastify) => {
       const submissionResult = await fastify.db.query<{
         receipt_id: string;
         form_id: number;
+        submitted_by_user_id: number;
         submitted_at: Date;
       }>(
         `
-          SELECT receipt_id, form_id, submitted_at
+          SELECT receipt_id, form_id, submitted_by_user_id, submitted_at
           FROM app.evaluation_submissions
           WHERE receipt_id = $1
           LIMIT 1
@@ -477,6 +478,16 @@ const evaluationsRoutes: FastifyPluginAsync = async (fastify) => {
 
       const submission = submissionResult.rows[0];
       if (!submission) {
+        throw fastify.httpErrors.notFound("Submission not found");
+      }
+
+      const canAccessAnyReceipt =
+        request.auth.role === "admin" || request.auth.role === "reviewer";
+
+      if (
+        !canAccessAnyReceipt &&
+        submission.submitted_by_user_id !== request.auth.userId
+      ) {
         throw fastify.httpErrors.notFound("Submission not found");
       }
 

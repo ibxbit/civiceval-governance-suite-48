@@ -293,4 +293,56 @@ describe("auth routes", () => {
     expect(logout.statusCode).toBe(200);
     expect(sessions[0]?.revoked_at).not.toBeNull();
   });
+
+  it("requires nonce for authenticated /auth/me", async () => {
+    const app = await makeApp();
+    users.push({
+      id: 1,
+      username: "alice",
+      password_hash: await hashPassword("Admin@12345678"),
+      role: "participant",
+    });
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      headers: nonceHeaders(),
+      payload: { username: "alice", password: "Admin@12345678" },
+    });
+
+    const token = login.json().accessToken as string;
+    const me = await app.inject({
+      method: "GET",
+      url: "/api/auth/me",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(me.statusCode).toBe(400);
+  });
+
+  it("requires nonce for authenticated admin login-events read", async () => {
+    const app = await makeApp();
+    users.push({
+      id: 1,
+      username: "admin",
+      password_hash: await hashPassword("Admin@12345678"),
+      role: "admin",
+    });
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      headers: nonceHeaders(),
+      payload: { username: "admin", password: "Admin@12345678" },
+    });
+
+    const token = login.json().accessToken as string;
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/auth/login-events/unrecognized?page=1&limit=20",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
 });

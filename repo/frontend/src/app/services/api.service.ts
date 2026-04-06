@@ -2,6 +2,16 @@ import { HttpClient, HttpHeaders, HttpParams } from "@angular/common/http";
 import { Injectable } from "@angular/core";
 import { Observable } from "rxjs";
 
+const LOCAL_HOSTNAME_PATTERNS = [
+  /^localhost$/i,
+  /^127\./,
+  /^::1$/,
+  /^10\./,
+  /^192\.168\./,
+  /^172\.(1[6-9]|2\d|3[0-1])\./,
+  /\.local$/i,
+];
+
 @Injectable({ providedIn: "root" })
 export class ApiService {
   private readonly apiPrefix = "/api";
@@ -34,7 +44,29 @@ export class ApiService {
   }
 
   private withPrefix(path: string): string {
+    this.assertLocalOnlyBoundary();
     return `${this.apiPrefix}${path.startsWith("/") ? path : `/${path}`}`;
+  }
+
+  private assertLocalOnlyBoundary(): void {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const hostname = window.location.hostname;
+    const isLocalHostname = LOCAL_HOSTNAME_PATTERNS.some((pattern) =>
+      pattern.test(hostname),
+    );
+
+    if (isLocalHostname) {
+      return;
+    }
+
+    // Frontend boundary only: backend/network policies must also enforce local-only access.
+    // TODO(security): mirror this boundary with infrastructure network controls in deployment.
+    throw new Error(
+      "This frontend build is restricted to local/private-network operation.",
+    );
   }
 
   private buildHeaders(): HttpHeaders {

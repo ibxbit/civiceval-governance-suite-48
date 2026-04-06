@@ -1,5 +1,5 @@
 import { TestBed } from "@angular/core/testing";
-import { ActivatedRouteSnapshot, Router } from "@angular/router";
+import { ActivatedRouteSnapshot, Router, RouterStateSnapshot } from "@angular/router";
 
 import { roleGuard } from "./role.guard";
 import { AuthService, type AuthUser } from "../services/auth.service";
@@ -24,9 +24,9 @@ describe("roleGuard", () => {
   });
 
   it("allows navigation when route has no role requirements", () => {
-    const route = { data: {} } as ActivatedRouteSnapshot;
+    const route = { data: {} } as unknown as ActivatedRouteSnapshot;
 
-    const result = TestBed.runInInjectionContext(() => roleGuard(route));
+    const result = TestBed.runInInjectionContext(() => roleGuard(route, state));
 
     expect(result).toBeTrue();
   });
@@ -34,14 +34,14 @@ describe("roleGuard", () => {
   it("allows navigation when user role is in allowlist", () => {
     const route = {
       data: { roles: ["admin", "reviewer"] },
-    } as ActivatedRouteSnapshot;
+    } as unknown as ActivatedRouteSnapshot;
     authService.getCurrentUserSnapshot.and.returnValue({
       id: 2,
       username: "reviewer-user",
       role: "reviewer",
     } as AuthUser);
 
-    const result = TestBed.runInInjectionContext(() => roleGuard(route));
+    const result = TestBed.runInInjectionContext(() => roleGuard(route, state));
 
     expect(result).toBeTrue();
   });
@@ -49,15 +49,16 @@ describe("roleGuard", () => {
   it("redirects to activities when user role is not allowed", () => {
     const route = {
       data: { roles: ["admin"] },
-    } as ActivatedRouteSnapshot;
+    } as unknown as ActivatedRouteSnapshot;
     authService.getCurrentUserSnapshot.and.returnValue({
       id: 3,
       username: "participant-user",
       role: "participant",
     } as AuthUser);
 
-    TestBed.runInInjectionContext(() => roleGuard(route));
+    TestBed.runInInjectionContext(() => roleGuard(route, state));
 
     expect(router.createUrlTree).toHaveBeenCalledWith(["/activities"]);
   });
 });
+  const state = { url: "/activities" } as RouterStateSnapshot;

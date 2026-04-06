@@ -39,6 +39,7 @@ type SummaryResponse = {
       />
 
       <p *ngIf="isLoading">Loading analytics...</p>
+      <p *ngIf="exportError" class="error">{{ exportError }}</p>
       <app-analytics-cards [summary]="summary" />
       <app-analytics-insights [summary]="summary" />
     </section>
@@ -48,6 +49,7 @@ export class AnalyticsPageComponent {
   protected readonly form;
   protected summary: SummaryResponse | null = null;
   protected isLoading = false;
+  protected exportError = "";
 
   public constructor(
     private readonly api: ApiService,
@@ -85,6 +87,7 @@ export class AnalyticsPageComponent {
   }
 
   protected exportCsv(): void {
+    this.exportError = "";
     const startDate = this.form.controls.startDate.value;
     const endDate = this.form.controls.endDate.value;
     const token = localStorage.getItem("auth.token") ?? "";
@@ -109,7 +112,12 @@ export class AnalyticsPageComponent {
         anchor.download = `analytics-${startDate}-${endDate}.csv`;
         anchor.click();
         URL.revokeObjectURL(objectUrl);
+
+        // Export audit immutability is enforced by backend audit logging.
+        // TODO(frontend-boundary): show signed audit receipt when backend exposes audit receipt endpoint.
       })
-      .catch(() => undefined);
+      .catch(() => {
+        this.exportError = "CSV export failed.";
+      });
   }
 }

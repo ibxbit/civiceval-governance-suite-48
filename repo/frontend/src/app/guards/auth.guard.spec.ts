@@ -1,5 +1,5 @@
 import { TestBed } from "@angular/core/testing";
-import { Router } from "@angular/router";
+import { ActivatedRouteSnapshot, Router, RouterStateSnapshot } from "@angular/router";
 
 import { authGuard } from "./auth.guard";
 import { AuthService, type AuthUser } from "../services/auth.service";
@@ -30,7 +30,7 @@ describe("authGuard", () => {
       role: "participant",
     } as AuthUser);
 
-    const result = TestBed.runInInjectionContext(() => authGuard());
+    const result = TestBed.runInInjectionContext(() => authGuard(route, state));
 
     expect(result).toBeTrue();
     expect(router.createUrlTree).not.toHaveBeenCalled();
@@ -39,8 +39,10 @@ describe("authGuard", () => {
   it("redirects to login when user is anonymous", () => {
     authService.getCurrentUserSnapshot.and.returnValue(null);
 
-    TestBed.runInInjectionContext(() => authGuard());
+    TestBed.runInInjectionContext(() => authGuard(route, state));
 
     expect(router.createUrlTree).toHaveBeenCalledWith(["/login"]);
   });
 });
+  const route = {} as ActivatedRouteSnapshot;
+  const state = { url: "/activities" } as RouterStateSnapshot;

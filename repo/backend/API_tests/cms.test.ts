@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import cmsRoutes from "../src/routes/cms.js";
 
 describe("cms routes", () => {
-  const buildApp = async () => {
+  const buildApp = async (role: "program_owner" | "admin" = "program_owner") => {
     const app = Fastify();
     await app.register(sensible);
     await app.register(jwt, { secret: "test-secret-test-secret-test-secret" });
@@ -21,6 +21,7 @@ describe("cms routes", () => {
     });
 
     let version = 1;
+    let sensitiveTerms = ["password", "ssn", "credit card", "secret", "api key"];
 
     const queryFn = async <T>(text: string, values?: unknown[]) => {
       if (text.includes("SELECT s.id AS session_id")) {
@@ -30,9 +31,26 @@ describe("cms routes", () => {
               session_id: 1,
               user_id: 1,
               username: "owner",
-              role: "program_owner",
+              role,
             },
           ] as T[],
+        };
+      }
+
+      if (text.includes("UPDATE app.cms_sensitive_terms") && text.includes("SET is_active = FALSE")) {
+        sensitiveTerms = [];
+        return { rows: [] as T[] };
+      }
+
+      if (text.includes("INSERT INTO app.cms_sensitive_terms")) {
+        const term = String(values?.[0] ?? "");
+        sensitiveTerms = [...sensitiveTerms, term];
+        return { rows: [] as T[] };
+      }
+
+      if (text.includes("FROM app.cms_sensitive_terms")) {
+        return {
+          rows: sensitiveTerms.map((term) => ({ term })) as T[],
         };
       }
 
@@ -274,7 +292,7 @@ describe("cms routes", () => {
     const versions = await app.inject({
       method: "GET",
       url: "/api/cms/content/1/versions",
-      headers: { authorization: `Bearer ${token}` },
+      headers: headers(token),
     });
     expect(versions.statusCode).toBe(200);
     expect(versions.json().versions.length).toBeGreaterThan(0);
@@ -300,5 +318,55 @@ describe("cms routes", () => {
     });
 
     expect(response.statusCode).toBe(400);
+  });
+
+  it("uses configurable sensitive-word policy", async () => {
+    const app = await buildApp("admin");
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const updatePolicy = await app.inject({
+      method: "PUT",
+      url: "/api/cms/policy/sensitive-words",
+      headers: headers(token),
+      payload: { words: ["classified", "title"] },
+    });
+    expect(updatePolicy.statusCode).toBe(200);
+
+    const allowsOldTerm = await app.inject({
+      method: "POST",
+      url: "/api/cms/content",
+      headers: headers(token),
+      payload: { title: "contains password", richText: "text", fileIds: [] },
+    });
+    expect(allowsOldTerm.statusCode).toBe(200);
+
+    const blocksNewTerm = await app.inject({
+      method: "POST",
+      url: "/api/cms/content",
+      headers: headers(token),
+      payload: { title: "contains classified", richText: "text", fileIds: [] },
+    });
+    expect(blocksNewTerm.statusCode).toBe(400);
+
+    const blockedPublish = await app.inject({
+      method: "POST",
+      url: "/api/cms/content/1/publish",
+      headers: headers(token),
+      payload: {},
+    });
+    expect(blockedPublish.statusCode).toBe(400);
+  });
+
+  it("enforces nonce on authenticated cms reads", async () => {
+    const app = await buildApp();
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const listWithoutNonce = await app.inject({
+      method: "GET",
+      url: "/api/cms/content?page=1&limit=20",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(listWithoutNonce.statusCode).toBe(400);
   });
 });

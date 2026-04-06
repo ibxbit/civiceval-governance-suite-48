@@ -164,6 +164,18 @@ This dictionary maps each table and field to its business meaning, PostgreSQL ty
 | created_by_user_id | BIGINT       | User causing version creation.                              | `NOT NULL`, FK `app.users(id)`, `ON DELETE RESTRICT`.      |
 | created_at         | TIMESTAMPTZ  | Version creation timestamp.                                 | `NOT NULL`, default `NOW()`.                               |
 
+## app.cms_sensitive_terms
+
+| Field              | Type        | Business Definition                                  | Validation / Rules                                  |
+| ------------------ | ----------- | ---------------------------------------------------- | --------------------------------------------------- |
+| id                 | BIGSERIAL   | Sensitive term policy row id.                        | Primary key.                                        |
+| term               | VARCHAR(80) | Blocked term checked against CMS title/content text. | `NOT NULL`, `UNIQUE`.                               |
+| is_active          | BOOLEAN     | Term active flag in runtime policy.                  | `NOT NULL`, default `TRUE`.                         |
+| created_by_user_id | BIGINT      | User that first created the term.                    | Nullable FK `app.users(id)`, `ON DELETE SET NULL`.  |
+| updated_by_user_id | BIGINT      | User that last updated active state.                 | Nullable FK `app.users(id)`, `ON DELETE SET NULL`.  |
+| created_at         | TIMESTAMPTZ | Creation timestamp.                                  | `NOT NULL`, default `NOW()`.                        |
+| updated_at         | TIMESTAMPTZ | Last update timestamp.                               | `NOT NULL`, default `NOW()`.                        |
+
 ## app.evaluation_forms
 
 | Field              | Type          | Business Definition                    | Validation / Rules                                      |
@@ -245,6 +257,38 @@ This dictionary maps each table and field to its business meaning, PostgreSQL ty
 | resolution_note    | VARCHAR(500)  | Resolution note from moderator.                     | Nullable.                                               |
 | created_by_user_id | BIGINT        | Reporting user id.                                  | `NOT NULL`, FK `app.users(id)`, `ON DELETE RESTRICT`.   |
 | created_at         | TIMESTAMPTZ   | Report creation time.                               | `NOT NULL`, default `NOW()`.                            |
+
+## app.qna_entries
+
+| Field              | Type         | Business Definition                                     | Validation / Rules                                    |
+| ------------------ | ------------ | ------------------------------------------------------- | ----------------------------------------------------- |
+| id                 | BIGSERIAL    | Q&A entry id.                                           | Primary key.                                          |
+| activity_id        | BIGINT       | Related activity when scoped to an event.               | Nullable FK `app.activities(id)`, `ON DELETE SET NULL`. |
+| question_text      | TEXT         | Participant/reviewer question text.                     | `NOT NULL`.                                           |
+| answer_text        | TEXT         | Optional answer text.                                   | Nullable.                                             |
+| status             | VARCHAR(16)  | Moderation status (`pending`, `approved`, `blocked`).   | `NOT NULL`, `CHECK` enum.                             |
+| pinned             | BOOLEAN      | Pinning flag for queue priority.                        | `NOT NULL`, default `FALSE`.                          |
+| created_by_user_id | BIGINT       | Q&A author id.                                          | `NOT NULL`, FK `app.users(id)`, `ON DELETE RESTRICT`. |
+| moderated_by_user_id | BIGINT     | Moderator user id for latest action.                    | Nullable FK `app.users(id)`, `ON DELETE SET NULL`.    |
+| moderation_note    | VARCHAR(500) | Moderator note.                                         | Nullable.                                             |
+| moderated_at       | TIMESTAMPTZ  | Last moderation timestamp.                              | Nullable.                                             |
+| created_at         | TIMESTAMPTZ  | Q&A creation timestamp.                                 | `NOT NULL`, default `NOW()`.                          |
+| updated_at         | TIMESTAMPTZ  | Last update/moderation timestamp.                       | `NOT NULL`, default `NOW()`.                          |
+
+## app.qna_reports
+
+| Field              | Type          | Business Definition                                      | Validation / Rules                                      |
+| ------------------ | ------------- | -------------------------------------------------------- | ------------------------------------------------------- |
+| id                 | BIGSERIAL     | Q&A report id.                                           | Primary key.                                            |
+| qna_id             | BIGINT        | Reported Q&A id.                                         | `NOT NULL`, FK `app.qna_entries(id)`, `ON DELETE CASCADE`. |
+| reason             | VARCHAR(300)  | Report reason.                                           | `NOT NULL`.                                             |
+| details            | VARCHAR(1000) | Optional report details.                                 | Nullable.                                               |
+| status             | VARCHAR(16)   | Resolution state (`open`, `resolved`, `dismissed`).      | `NOT NULL`, `CHECK` enum.                               |
+| handled_by_user_id | BIGINT        | Reviewer/admin handling the report.                      | Nullable FK `app.users(id)`, `ON DELETE SET NULL`.      |
+| handled_at         | TIMESTAMPTZ   | Handling timestamp.                                      | Nullable.                                               |
+| resolution_note    | VARCHAR(500)  | Resolution note from moderator.                          | Nullable.                                               |
+| created_by_user_id | BIGINT        | Reporting user id.                                       | `NOT NULL`, FK `app.users(id)`, `ON DELETE RESTRICT`.   |
+| created_at         | TIMESTAMPTZ   | Report creation time.                                    | `NOT NULL`, default `NOW()`.                            |
 
 ## app.rankings
 

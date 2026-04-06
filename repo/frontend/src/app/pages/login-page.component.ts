@@ -15,6 +15,14 @@ import { AuthService } from "../services/auth.service";
         <h1>Sign In</h1>
         <p class="subtitle">Access CivicEval Governance Portal</p>
 
+        <button type="button" (click)="toggleMode()" class="mode-toggle">
+          {{
+            isRegisterMode
+              ? "Have an account? Sign In"
+              : "Need an account? Register"
+          }}
+        </button>
+
         <form [formGroup]="form" (ngSubmit)="onSubmit()" novalidate>
           <label>
             Username
@@ -38,7 +46,15 @@ import { AuthService } from "../services/auth.service";
           <p class="error" *ngIf="errorMessage">{{ errorMessage }}</p>
 
           <button type="submit" [disabled]="isSubmitting">
-            {{ isSubmitting ? "Signing in..." : "Sign In" }}
+            {{
+              isSubmitting
+                ? isRegisterMode
+                  ? "Creating account..."
+                  : "Signing in..."
+                : isRegisterMode
+                  ? "Create Account"
+                  : "Sign In"
+            }}
           </button>
         </form>
       </div>
@@ -50,6 +66,7 @@ export class LoginPageComponent {
 
   protected isSubmitting = false;
   protected errorMessage = "";
+  protected isRegisterMode = false;
 
   public constructor(
     private readonly fb: FormBuilder,
@@ -89,6 +106,26 @@ export class LoginPageComponent {
     const password = this.form.controls.password.value ?? "";
     this.isSubmitting = true;
 
+    if (this.isRegisterMode) {
+      this.auth.register(username, password).subscribe({
+        next: () => {
+          this.isSubmitting = false;
+          this.isRegisterMode = false;
+          this.errorMessage =
+            "Registration successful. Sign in using your new credentials.";
+          this.form.controls.password.reset("");
+        },
+        error: (error: { status?: number }) => {
+          this.isSubmitting = false;
+          this.errorMessage =
+            error.status === 409
+              ? "Username already exists."
+              : "Unable to register. Please try again.";
+        },
+      });
+      return;
+    }
+
     this.auth.login(username, password).subscribe({
       next: () => {
         this.isSubmitting = false;
@@ -107,5 +144,10 @@ export class LoginPageComponent {
         this.errorMessage = "Unable to sign in. Please try again.";
       },
     });
+  }
+
+  protected toggleMode(): void {
+    this.errorMessage = "";
+    this.isRegisterMode = !this.isRegisterMode;
   }
 }

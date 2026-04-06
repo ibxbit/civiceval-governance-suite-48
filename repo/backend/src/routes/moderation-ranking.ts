@@ -15,6 +15,14 @@ const reportIdParamsSchema = z.object({
   reportId: z.coerce.number().int().positive(),
 });
 
+const qnaIdParamsSchema = z.object({
+  qnaId: z.coerce.number().int().positive(),
+});
+
+const qnaReportIdParamsSchema = z.object({
+  reportId: z.coerce.number().int().positive(),
+});
+
 const createCommentSchema = z.object({
   contentId: z.coerce.number().int().positive().optional(),
   body: z.string().trim().min(1).max(2000),
@@ -27,6 +35,23 @@ const pinCommentSchema = z.object({
 const reportCommentSchema = z.object({
   reason: z.string().trim().min(3).max(300),
   details: z.string().trim().max(1000).optional(),
+});
+
+const createQnaSchema = z.object({
+  activityId: z.coerce.number().int().positive().optional(),
+  questionText: z.string().trim().min(1).max(2000),
+  answerText: z.string().trim().max(4000).optional(),
+});
+
+const reportQnaSchema = z.object({
+  reason: z.string().trim().min(3).max(300),
+  details: z.string().trim().max(1000).optional(),
+});
+
+const qnaListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  status: z.enum(["pending", "approved", "blocked", "all"]).default("all"),
 });
 
 const resolveReportSchema = z.object({
@@ -84,6 +109,34 @@ type ReportRow = {
   created_at: Date;
 };
 
+type QnaRow = {
+  id: number;
+  activity_id: number | null;
+  question_text: string;
+  answer_text: string | null;
+  status: "pending" | "approved" | "blocked";
+  pinned: boolean;
+  created_by_user_id: number;
+  moderated_by_user_id: number | null;
+  moderation_note: string | null;
+  moderated_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type QnaReportRow = {
+  id: number;
+  qna_id: number;
+  reason: string;
+  details: string | null;
+  status: "open" | "resolved" | "dismissed";
+  handled_by_user_id: number | null;
+  handled_at: Date | null;
+  resolution_note: string | null;
+  created_by_user_id: number;
+  created_at: Date;
+};
+
 type RankingRow = {
   id: number;
   subject_key: string;
@@ -101,7 +154,7 @@ type RankingRow = {
 const moderationRankingRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     "/moderation/comments",
-    { preHandler: [authGuard] },
+    { preHandler: [authGuard, roleGuard("reviewer", "admin"), nonceGuard] },
     async (request) => {
       const query = commentsListQuerySchema.safeParse(request.query);
       if (!query.success) {
@@ -159,7 +212,7 @@ const moderationRankingRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get(
     "/moderation/reports",
-    { preHandler: [authGuard, roleGuard("reviewer", "admin")] },
+    { preHandler: [authGuard, roleGuard("reviewer", "admin"), nonceGuard] },
     async (request) => {
       const pagination = paginationSchema.safeParse(request.query);
       if (!pagination.success) {
@@ -576,6 +629,459 @@ const moderationRankingRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
+  fastify.get(
+    "/moderation/qna",
+    { preHandler: [authGuard, roleGuard("reviewer", "admin"), nonceGuard] },
+    async (request) => {
+      const query = qnaListQuerySchema.safeParse(request.query);
+      if (!query.success) {
+        throw fastify.httpErrors.badRequest("Invalid qna query");
+      }
+
+      const offset = (query.data.page - 1) * query.data.limit;
+      const statusWhere = query.data.status === "all" ? "" : "AND status = $3";
+      const params =
+        query.data.status === "all"
+          ? [query.data.limit, offset]
+          : [query.data.limit, offset, query.data.status];
+
+      const dataResult = await fastify.db.query<QnaRow>(
+        `
+          SELECT
+            id,
+            activity_id,
+            question_text,
+            answer_text,
+            status,
+            pinned,
+            created_by_user_id,
+            moderated_by_user_id,
+            moderation_note,
+            moderated_at,
+            created_at,
+            updated_at
+          FROM app.qna_entries
+          WHERE 1=1
+          ${statusWhere}
+          ORDER BY pinned DESC, updated_at DESC, id DESC
+          LIMIT $1 OFFSET $2
+        `,
+        params,
+      );
+
+      const totalResult = await fastify.db.query<{ total: string }>(
+        `
+          SELECT COUNT(*)::text AS total
+          FROM app.qna_entries
+          WHERE 1=1
+          ${query.data.status === "all" ? "" : "AND status = $1"}
+        `,
+        query.data.status === "all" ? [] : [query.data.status],
+      );
+
+      return {
+        data: dataResult.rows.map(mapQna),
+        total: Number(totalResult.rows[0]?.total ?? "0"),
+        page: query.data.page,
+        limit: query.data.limit,
+      };
+    },
+  );
+
+  fastify.post(
+    "/moderation/qna",
+    {
+      preHandler: [authGuard, roleGuard("participant", "reviewer"), nonceGuard],
+    },
+    async (request) => {
+      const body = createQnaSchema.safeParse(request.body);
+      if (!body.success) {
+        throw fastify.httpErrors.badRequest("Invalid qna payload");
+      }
+
+      const inserted = await fastify.db.query<QnaRow>(
+        `
+          INSERT INTO app.qna_entries (
+            activity_id,
+            question_text,
+            answer_text,
+            status,
+            pinned,
+            created_by_user_id
+          )
+          VALUES ($1, $2, $3, 'pending', FALSE, $4)
+          RETURNING
+            id,
+            activity_id,
+            question_text,
+            answer_text,
+            status,
+            pinned,
+            created_by_user_id,
+            moderated_by_user_id,
+            moderation_note,
+            moderated_at,
+            created_at,
+            updated_at
+        `,
+        [
+          body.data.activityId ?? null,
+          body.data.questionText,
+          body.data.answerText ?? null,
+          request.auth.userId,
+        ],
+      );
+
+      return mapQna(inserted.rows[0]);
+    },
+  );
+
+  fastify.post(
+    "/moderation/qna/:qnaId/approve",
+    { preHandler: [authGuard, roleGuard("reviewer", "admin"), nonceGuard] },
+    async (request) => {
+      const params = qnaIdParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw fastify.httpErrors.badRequest("Invalid qna id");
+      }
+
+      const updated = await fastify.db.query<QnaRow>(
+        `
+          UPDATE app.qna_entries
+          SET
+            status = 'approved',
+            moderated_by_user_id = $2,
+            moderated_at = NOW(),
+            updated_at = NOW()
+          WHERE id = $1
+          RETURNING
+            id,
+            activity_id,
+            question_text,
+            answer_text,
+            status,
+            pinned,
+            created_by_user_id,
+            moderated_by_user_id,
+            moderation_note,
+            moderated_at,
+            created_at,
+            updated_at
+        `,
+        [params.data.qnaId, request.auth.userId],
+      );
+
+      if (!updated.rows[0]) {
+        throw fastify.httpErrors.notFound("Q&A entry not found");
+      }
+
+      return mapQna(updated.rows[0]);
+    },
+  );
+
+  fastify.post(
+    "/moderation/qna/:qnaId/pin",
+    { preHandler: [authGuard, roleGuard("reviewer", "admin"), nonceGuard] },
+    async (request) => {
+      const params = qnaIdParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw fastify.httpErrors.badRequest("Invalid qna id");
+      }
+
+      const body = pinCommentSchema.safeParse(request.body ?? {});
+      if (!body.success) {
+        throw fastify.httpErrors.badRequest("Invalid pin payload");
+      }
+
+      const updated = await fastify.db.query<QnaRow>(
+        `
+          UPDATE app.qna_entries
+          SET
+            pinned = $2,
+            moderated_by_user_id = $3,
+            moderated_at = NOW(),
+            updated_at = NOW()
+          WHERE id = $1
+          RETURNING
+            id,
+            activity_id,
+            question_text,
+            answer_text,
+            status,
+            pinned,
+            created_by_user_id,
+            moderated_by_user_id,
+            moderation_note,
+            moderated_at,
+            created_at,
+            updated_at
+        `,
+        [params.data.qnaId, body.data.pinned, request.auth.userId],
+      );
+
+      if (!updated.rows[0]) {
+        throw fastify.httpErrors.notFound("Q&A entry not found");
+      }
+
+      return mapQna(updated.rows[0]);
+    },
+  );
+
+  fastify.post(
+    "/moderation/qna/:qnaId/block",
+    { preHandler: [authGuard, roleGuard("reviewer", "admin"), nonceGuard] },
+    async (request) => {
+      const params = qnaIdParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw fastify.httpErrors.badRequest("Invalid qna id");
+      }
+
+      const updated = await fastify.db.query<QnaRow>(
+        `
+          UPDATE app.qna_entries
+          SET
+            status = 'blocked',
+            pinned = FALSE,
+            moderated_by_user_id = $2,
+            moderated_at = NOW(),
+            updated_at = NOW()
+          WHERE id = $1
+          RETURNING
+            id,
+            activity_id,
+            question_text,
+            answer_text,
+            status,
+            pinned,
+            created_by_user_id,
+            moderated_by_user_id,
+            moderation_note,
+            moderated_at,
+            created_at,
+            updated_at
+        `,
+        [params.data.qnaId, request.auth.userId],
+      );
+
+      if (!updated.rows[0]) {
+        throw fastify.httpErrors.notFound("Q&A entry not found");
+      }
+
+      return mapQna(updated.rows[0]);
+    },
+  );
+
+  fastify.post(
+    "/moderation/qna/:qnaId/reports",
+    {
+      preHandler: [authGuard, roleGuard("participant", "reviewer"), nonceGuard],
+    },
+    async (request) => {
+      const params = qnaIdParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw fastify.httpErrors.badRequest("Invalid qna id");
+      }
+
+      const body = reportQnaSchema.safeParse(request.body);
+      if (!body.success) {
+        throw fastify.httpErrors.badRequest("Invalid report payload");
+      }
+
+      const inserted = await fastify.db.query<QnaReportRow>(
+        `
+          INSERT INTO app.qna_reports (
+            qna_id,
+            reason,
+            details,
+            status,
+            created_by_user_id
+          )
+          VALUES ($1, $2, $3, 'open', $4)
+          RETURNING
+            id,
+            qna_id,
+            reason,
+            details,
+            status,
+            handled_by_user_id,
+            handled_at,
+            resolution_note,
+            created_by_user_id,
+            created_at
+        `,
+        [
+          params.data.qnaId,
+          body.data.reason,
+          body.data.details ?? null,
+          request.auth.userId,
+        ],
+      );
+
+      return mapQnaReport(inserted.rows[0]);
+    },
+  );
+
+  fastify.get(
+    "/moderation/qna/reports",
+    { preHandler: [authGuard, roleGuard("reviewer", "admin"), nonceGuard] },
+    async (request) => {
+      const pagination = paginationSchema.safeParse(request.query);
+      if (!pagination.success) {
+        throw fastify.httpErrors.badRequest("Invalid reports query");
+      }
+
+      const offset = (pagination.data.page - 1) * pagination.data.limit;
+      const dataResult = await fastify.db.query<QnaReportRow>(
+        `
+          SELECT
+            id,
+            qna_id,
+            reason,
+            details,
+            status,
+            handled_by_user_id,
+            handled_at,
+            resolution_note,
+            created_by_user_id,
+            created_at
+          FROM app.qna_reports
+          WHERE status = 'open'
+          ORDER BY created_at DESC, id DESC
+          LIMIT $1 OFFSET $2
+        `,
+        [pagination.data.limit, offset],
+      );
+
+      const totalResult = await fastify.db.query<{ total: string }>(
+        `SELECT COUNT(*)::text AS total FROM app.qna_reports WHERE status = 'open'`,
+      );
+
+      return {
+        data: dataResult.rows.map(mapQnaReport),
+        total: Number(totalResult.rows[0]?.total ?? "0"),
+        page: pagination.data.page,
+        limit: pagination.data.limit,
+      };
+    },
+  );
+
+  fastify.post(
+    "/moderation/qna/reports/:reportId/handle",
+    { preHandler: [authGuard, roleGuard("reviewer", "admin"), nonceGuard] },
+    async (request) => {
+      const params = qnaReportIdParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw fastify.httpErrors.badRequest("Invalid report id");
+      }
+
+      const body = resolveReportSchema.safeParse(request.body);
+      if (!body.success) {
+        throw fastify.httpErrors.badRequest("Invalid report handling payload");
+      }
+
+      const client = await fastify.db.connect();
+      try {
+        await client.query("BEGIN");
+
+        const reportResult = await client.query<QnaReportRow>(
+          `
+            SELECT
+              id,
+              qna_id,
+              reason,
+              details,
+              status,
+              handled_by_user_id,
+              handled_at,
+              resolution_note,
+              created_by_user_id,
+              created_at
+            FROM app.qna_reports
+            WHERE id = $1
+            LIMIT 1
+            FOR UPDATE
+          `,
+          [params.data.reportId],
+        );
+
+        const report = reportResult.rows[0];
+        if (!report) {
+          throw fastify.httpErrors.notFound("Report not found");
+        }
+
+        if (report.status !== "open") {
+          throw fastify.httpErrors.badRequest("Report has already been handled");
+        }
+
+        if (body.data.action === "approve") {
+          await client.query(
+            `
+              UPDATE app.qna_entries
+              SET
+                status = 'approved',
+                moderated_by_user_id = $2,
+                moderated_at = NOW(),
+                updated_at = NOW()
+              WHERE id = $1
+            `,
+            [report.qna_id, request.auth.userId],
+          );
+        }
+
+        if (body.data.action === "block") {
+          await client.query(
+            `
+              UPDATE app.qna_entries
+              SET
+                status = 'blocked',
+                pinned = FALSE,
+                moderated_by_user_id = $2,
+                moderated_at = NOW(),
+                updated_at = NOW()
+              WHERE id = $1
+            `,
+            [report.qna_id, request.auth.userId],
+          );
+        }
+
+        const nextStatus =
+          body.data.action === "dismiss" ? "dismissed" : "resolved";
+
+        const handled = await client.query<QnaReportRow>(
+          `
+            UPDATE app.qna_reports
+            SET
+              status = $2,
+              handled_by_user_id = $3,
+              handled_at = NOW(),
+              resolution_note = $4
+            WHERE id = $1
+            RETURNING
+              id,
+              qna_id,
+              reason,
+              details,
+              status,
+              handled_by_user_id,
+              handled_at,
+              resolution_note,
+              created_by_user_id,
+              created_at
+          `,
+          [report.id, nextStatus, request.auth.userId, body.data.note ?? null],
+        );
+
+        await client.query("COMMIT");
+        return mapQnaReport(handled.rows[0]);
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+  );
+
   fastify.post(
     "/rankings/score",
     {
@@ -647,7 +1153,10 @@ const moderationRankingRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.get("/rankings/latest", { preHandler: [authGuard] }, async () => {
+  fastify.get(
+    "/rankings/latest",
+    { preHandler: [authGuard, nonceGuard] },
+    async () => {
     const latest = await fastify.db.query<RankingRow>(
       `
         SELECT DISTINCT ON (subject_key)
@@ -670,7 +1179,8 @@ const moderationRankingRoutes: FastifyPluginAsync = async (fastify) => {
     return {
       rankings: latest.rows.map(mapRanking),
     };
-  });
+    },
+  );
 };
 
 const calculateScore = (input: {
@@ -706,6 +1216,34 @@ const mapComment = (comment: CommentRow) => ({
 const mapReport = (report: ReportRow) => ({
   id: report.id,
   commentId: report.comment_id,
+  reason: maskSensitiveDigits(report.reason),
+  details: maskNullableText(report.details),
+  status: report.status,
+  handledByUserId: report.handled_by_user_id,
+  handledAt: report.handled_at,
+  resolutionNote: maskNullableText(report.resolution_note),
+  createdByUserId: report.created_by_user_id,
+  createdAt: report.created_at,
+});
+
+const mapQna = (entry: QnaRow) => ({
+  id: entry.id,
+  activityId: entry.activity_id,
+  questionText: maskSensitiveDigits(entry.question_text),
+  answerText: maskNullableText(entry.answer_text),
+  status: entry.status,
+  pinned: entry.pinned,
+  createdByUserId: entry.created_by_user_id,
+  moderatedByUserId: entry.moderated_by_user_id,
+  moderationNote: maskNullableText(entry.moderation_note),
+  moderatedAt: entry.moderated_at,
+  createdAt: entry.created_at,
+  updatedAt: entry.updated_at,
+});
+
+const mapQnaReport = (report: QnaReportRow) => ({
+  id: report.id,
+  qnaId: report.qna_id,
   reason: maskSensitiveDigits(report.reason),
   details: maskNullableText(report.details),
   status: report.status,

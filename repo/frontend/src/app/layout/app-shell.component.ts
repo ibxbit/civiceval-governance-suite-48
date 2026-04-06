@@ -1,13 +1,15 @@
 import { CommonModule } from "@angular/common";
-import { Component } from "@angular/core";
+import { Component, OnDestroy } from "@angular/core";
 import {
+  NavigationEnd,
   Router,
   RouterLink,
   RouterLinkActive,
   RouterOutlet,
 } from "@angular/router";
-import { map } from "rxjs";
+import { Subscription, filter, map } from "rxjs";
 
+import { AnalyticsService } from "../services/analytics.service";
 import { AuthService, type UserRole } from "../services/auth.service";
 
 type NavItem = {
@@ -24,6 +26,9 @@ type NavItem = {
     <div class="app-shell">
       <aside class="side-nav" aria-label="Primary">
         <div class="brand">Eaglepoint</div>
+        <small *ngIf="localOnlyBoundaryNotice" class="boundary-notice">
+          {{ localOnlyBoundaryNotice }}
+        </small>
         <div class="user" *ngIf="user$ | async as user">
           <div>{{ user.username }}</div>
           <small>{{ user.role }}</small>
@@ -46,9 +51,11 @@ type NavItem = {
     </div>
   `,
 })
-export class AppShellComponent {
+export class AppShellComponent implements OnDestroy {
   protected readonly user$;
   protected readonly visibleNavItems$;
+  private readonly routerEventsSubscription: Subscription;
+  protected readonly localOnlyBoundaryNotice: string;
 
   protected readonly navItems: NavItem[] = [
     {
@@ -90,6 +97,7 @@ export class AppShellComponent {
 
   public constructor(
     private readonly auth: AuthService,
+    private readonly analytics: AnalyticsService,
     private readonly router: Router,
   ) {
     this.user$ = this.auth.currentUser$;
@@ -102,6 +110,21 @@ export class AppShellComponent {
         return this.navItems.filter((item) => item.roles.includes(user.role));
       }),
     );
+
+    this.routerEventsSubscription = this.router.events
+      .pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd))
+      .subscribe((event) => {
+        this.analytics
+          .trackPageView(event.urlAfterRedirects, document.referrer)
+          .subscribe({ error: () => undefined });
+      });
+
+    this.localOnlyBoundaryNotice =
+      "Local-only mode: use localhost/private-network deployment only.";
+  }
+
+  public ngOnDestroy(): void {
+    this.routerEventsSubscription.unsubscribe();
   }
 
   protected logout(): void {

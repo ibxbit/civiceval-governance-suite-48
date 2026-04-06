@@ -1,0 +1,3 @@
+# CivicEval nightly backup schedule (UTC)
+# Runs every night at 02:00 UTC.
+0 2 * * * cd /opt/civiceval/backend && DATABASE_URL="$DATABASE_URL" BACKUP_DIR="/secure/eaglepoint/backups" CMS_STORAGE_ROOT="/secure/eaglepoint/cms-storage" npm run backup >> /var/log/civiceval-backup.log 2>&1

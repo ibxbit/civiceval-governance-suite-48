@@ -1,10 +1,11 @@
 import { CommonModule } from "@angular/common";
-import { Component } from "@angular/core";
+import { Component, OnDestroy } from "@angular/core";
 import { FormBuilder, ReactiveFormsModule, Validators } from "@angular/forms";
 
 import { ActivityCreateFormComponent } from "../components/activities/activity-create-form.component";
 import { ActivityDetailPanelComponent } from "../components/activities/activity-detail-panel.component";
 import { ActivitiesTableComponent } from "../components/activities/activities-table.component";
+import { AnalyticsService } from "../services/analytics.service";
 import { AuthService } from "../services/auth.service";
 import { ApiService } from "../services/api.service";
 
@@ -42,6 +43,18 @@ type Activity = {
         </button>
       </div>
 
+      <form [formGroup]="searchForm" (ngSubmit)="searchActivities()">
+        <label for="activity-search">Search activities</label>
+        <input
+          id="activity-search"
+          type="search"
+          formControlName="query"
+          placeholder="Search by title or description"
+        />
+        <button type="submit">Search</button>
+        <button type="button" (click)="clearSearch()">Clear</button>
+      </form>
+
       <app-activity-create-form
         *ngIf="showCreateForm"
         [form]="createForm"
@@ -51,6 +64,7 @@ type Activity = {
 
       <p *ngIf="isLoading">Loading activities...</p>
       <p *ngIf="!isLoading && errorMessage" class="error">{{ errorMessage }}</p>
+      <p *ngIf="registrationMessage">{{ registrationMessage }}</p>
       <p *ngIf="!isLoading && activities.length === 0">No activities found.</p>
 
       <app-activities-table
@@ -66,12 +80,17 @@ type Activity = {
         [registrations]="registrations"
         [checkinCode]="checkinCode"
         [canManage]="canManageActivities"
+        [canCheckin]="canParticipate"
+        [checkinLoading]="isCheckinLoading"
+        [checkinError]="checkinError"
+        [checkinSuccess]="checkinSuccess"
         (generateCode)="generateCode($event)"
+        (checkinSubmitted)="submitCheckin($event)"
       />
     </section>
   `,
 })
-export class ActivitiesPageComponent {
+export class ActivitiesPageComponent implements OnDestroy {
   protected activities: Activity[] = [];
   protected registrations: Array<{ id: number; username: string }> = [];
   protected selectedActivity: Activity | null = null;
@@ -80,14 +99,24 @@ export class ActivitiesPageComponent {
   protected errorMessage = "";
   protected createError = "";
   protected showCreateForm = false;
+  protected activeSearchQuery = "";
+  protected isCheckinLoading = false;
+  protected checkinError = "";
+  protected checkinSuccess = "";
+  protected registrationMessage = "";
 
   protected readonly canManageActivities: boolean;
   protected readonly canParticipate: boolean;
 
   protected readonly createForm;
+  protected readonly searchForm;
+
+  private selectedAtMs: number | null = null;
+  private selectedActivityId: number | null = null;
 
   public constructor(
     private readonly api: ApiService,
+    private readonly analytics: AnalyticsService,
     private readonly auth: AuthService,
     private readonly fb: FormBuilder,
   ) {
@@ -101,6 +130,10 @@ export class ActivitiesPageComponent {
       endsAt: ["", [Validators.required]],
     });
 
+    this.searchForm = this.fb.group({
+      query: ["", [Validators.maxLength(120)]],
+    });
+
     const role = this.auth.getCurrentUserSnapshot()?.role;
     this.canManageActivities = role === "program_owner" || role === "admin";
     this.canParticipate = role === "participant";
@@ -112,12 +145,19 @@ export class ActivitiesPageComponent {
   }
 
   protected loadActivities(): void {
+    const rawQuery = String(this.searchForm.controls.query.value ?? "").trim();
+    const isSearching = rawQuery.length > 0;
     this.isLoading = true;
     this.api
-      .get<{ data: Activity[] }>("/activities", { page: 1, limit: 20 })
+      .get<{ data: Activity[] }>(isSearching ? "/activities/search" : "/activities", {
+        page: 1,
+        limit: 20,
+        ...(isSearching ? { q: rawQuery } : {}),
+      })
       .subscribe({
         next: (response: { data: Activity[] }) => {
           this.activities = response.data;
+          this.activeSearchQuery = isSearching ? rawQuery : "";
           this.isLoading = false;
         },
         error: () => {
@@ -125,6 +165,27 @@ export class ActivitiesPageComponent {
           this.isLoading = false;
         },
       });
+  }
+
+  protected searchActivities(): void {
+    if (this.searchForm.invalid) {
+      return;
+    }
+
+    const query = String(this.searchForm.controls.query.value ?? "").trim();
+    if (query.length > 0) {
+      this.analytics.trackSearch("/activities", query).subscribe({
+        error: () => undefined,
+      });
+    }
+
+    this.loadActivities();
+  }
+
+  protected clearSearch(): void {
+    this.searchForm.reset({ query: "" });
+    this.activeSearchQuery = "";
+    this.loadActivities();
   }
 
   protected createActivity(): void {
@@ -147,6 +208,14 @@ export class ActivitiesPageComponent {
   }
 
   protected selectActivity(activityId: number): void {
+    this.flushDetailDwell();
+
+    if (this.activeSearchQuery) {
+      this.analytics.trackSearchClick("/activities", activityId).subscribe({
+        error: () => undefined,
+      });
+    }
+
     this.api
       .get<
         Activity & { registrationCount: number }
@@ -154,6 +223,10 @@ export class ActivitiesPageComponent {
       .subscribe({
         next: (activity: Activity & { registrationCount: number }) => {
           this.selectedActivity = activity;
+          this.selectedAtMs = Date.now();
+          this.selectedActivityId = activity.id;
+          this.checkinError = "";
+          this.checkinSuccess = "";
           this.loadRegistrations(activityId);
         },
       });
@@ -175,7 +248,15 @@ export class ActivitiesPageComponent {
   }
 
   protected register(activityId: number): void {
-    this.api.post(`/activities/${activityId}/register`).subscribe();
+    this.registrationMessage = "";
+    this.api.post(`/activities/${activityId}/register`).subscribe({
+      next: () => {
+        this.registrationMessage = "Registration successful.";
+      },
+      error: () => {
+        this.registrationMessage = "Registration failed.";
+      },
+    });
   }
 
   protected generateCode(activityId: number): void {
@@ -188,5 +269,52 @@ export class ActivitiesPageComponent {
           this.checkinCode = response.code;
         },
       });
+  }
+
+  protected submitCheckin(payload: { activityId: number; code: string }): void {
+    this.isCheckinLoading = true;
+    this.checkinError = "";
+    this.checkinSuccess = "";
+
+    this.api
+      .post(`/activities/${payload.activityId}/checkin`, { code: payload.code })
+      .subscribe({
+        next: () => {
+          this.checkinSuccess = "Attendance submitted successfully.";
+          this.isCheckinLoading = false;
+        },
+        error: () => {
+          this.checkinError = "Check-in failed. Verify your one-time code.";
+          this.isCheckinLoading = false;
+        },
+      });
+  }
+
+  public ngOnDestroy(): void {
+    this.flushDetailDwell();
+  }
+
+  private flushDetailDwell(): void {
+    if (!this.selectedAtMs || !this.selectedActivityId) {
+      return;
+    }
+
+    const dwellMs = Date.now() - this.selectedAtMs;
+    if (dwellMs <= 0) {
+      return;
+    }
+
+    this.analytics
+      .trackDwell("/activities", dwellMs, this.selectedActivityId)
+      .subscribe({ error: () => undefined });
+
+    if (dwellMs >= 10_000) {
+      this.analytics
+        .trackReadComplete("/activities", this.selectedActivityId)
+        .subscribe({ error: () => undefined });
+    }
+
+    this.selectedAtMs = null;
+    this.selectedActivityId = null;
   }
 }

@@ -5,11 +5,13 @@ services:
     environment:
       POSTGRES_DB: eaglepoint
       POSTGRES_USER: app_user
-      POSTGRES_PASSWORD: app_password
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      ENABLE_SEED_ADMIN: ${ENABLE_SEED_ADMIN:-false}
+      SEED_ADMIN_PASSWORD_HASH: ${SEED_ADMIN_PASSWORD_HASH:-}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - type: bind
+        source: ${ENCRYPTED_POSTGRES_PATH:?Set ENCRYPTED_POSTGRES_PATH to an encrypted host directory}
+        target: /var/lib/postgresql/data
       - ./database/sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app_user -d eaglepoint"]
@@ -26,16 +28,16 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3000
-      DATABASE_URL: postgresql://app_user:app_password@database:5432/eaglepoint
-      CORS_ORIGIN: http://localhost:4200
-      JWT_SECRET: change_this_to_a_secure_minimum_32_character_value
+      DATABASE_URL: postgresql://app_user:${POSTGRES_PASSWORD}@database:5432/eaglepoint
+      CORS_ORIGIN: https://${PUBLIC_HOSTNAME:-localhost}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET to a 32+ character secret}
     depends_on:
       database:
         condition: service_healthy
-    ports:
-      - "3000:3000"
     volumes:
-      - cms_storage:/app/storage/private
+      - type: bind
+        source: ${ENCRYPTED_CMS_STORAGE_PATH:?Set ENCRYPTED_CMS_STORAGE_PATH to an encrypted host directory}
+        target: /app/storage/private
 
   frontend:
     build:
@@ -45,9 +47,19 @@ services:
     depends_on:
       backend:
         condition: service_started
-    ports:
-      - "4200:4200"
 
-volumes:
-  postgres_data:
-  cms_storage:
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_started
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./ops/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${TLS_CERT_PATH:?Set TLS_CERT_PATH to your TLS certificate file}:/etc/nginx/tls/server.crt:ro
+      - ${TLS_KEY_PATH:?Set TLS_KEY_PATH to your TLS private key file}:/etc/nginx/tls/server.key:ro

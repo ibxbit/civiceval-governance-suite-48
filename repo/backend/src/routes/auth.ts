@@ -143,7 +143,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get(
     "/auth/login-events/unrecognized",
-    { preHandler: [authGuard, roleGuard("admin")] },
+    { preHandler: [authGuard, roleGuard("admin"), nonceGuard] },
     async (request) => {
       const query = loginEventListQuerySchema.safeParse(request.query);
       if (!query.success) {
@@ -541,7 +541,10 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.get("/auth/me", { preHandler: [authGuard] }, async (request) => {
+  fastify.get(
+    "/auth/me",
+    { preHandler: [authGuard, nonceGuard] },
+    async (request) => {
     return {
       user: {
         id: request.auth.userId,
@@ -549,7 +552,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         role: request.auth.role,
       },
     };
-  });
+    },
+  );
 
   fastify.post(
     "/auth/logout",

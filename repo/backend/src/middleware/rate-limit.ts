@@ -6,3 +6,12 @@ export const loginRateLimitConfig = {
     },
   },
 } as const;
+
+export const searchRateLimitConfig = {
+  config: {
+    rateLimit: {
+      max: 20,
+      timeWindow: "1 minute",
+    },
+  },
+} as const;

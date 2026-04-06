@@ -96,7 +96,7 @@ const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get(
     "/analytics/summary",
-    { preHandler: [authGuard, roleGuard("program_owner", "admin")] },
+    { preHandler: [authGuard, roleGuard("program_owner", "admin"), nonceGuard] },
     async (request) => {
       const parsed = analyticsFilterSchema.safeParse(request.query);
       if (!parsed.success) {
@@ -220,7 +220,7 @@ const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get(
     "/analytics/export.csv",
-    { preHandler: [authGuard, roleGuard("program_owner", "admin")] },
+    { preHandler: [authGuard, roleGuard("program_owner", "admin"), nonceGuard] },
     async (request, reply) => {
       const parsed = analyticsFilterSchema.safeParse(request.query);
       if (!parsed.success) {

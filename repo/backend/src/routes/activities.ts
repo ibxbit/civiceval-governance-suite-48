@@ -6,6 +6,7 @@ import { z } from "zod";
 import { authGuard } from "../middleware/auth.js";
 import { logAuditEvent } from "../middleware/audit.js";
 import { nonceGuard } from "../middleware/nonce.js";
+import { searchRateLimitConfig } from "../middleware/rate-limit.js";
 import { roleGuard } from "../middleware/role.js";
 import { maskNullableText, maskSensitiveDigits } from "../utils/masking.js";
 
@@ -60,6 +61,10 @@ const paginationSchema = z.object({
 
 const activityListQuerySchema = paginationSchema.extend({
   status: z.enum(["upcoming", "active", "completed", "all"]).default("all"),
+});
+
+const activitySearchQuerySchema = paginationSchema.extend({
+  q: z.string().trim().min(1).max(120),
 });
 
 const checkinCodeCreateSchema = z.object({
@@ -118,7 +123,10 @@ type CheckinCodeCreateInput = z.infer<typeof checkinCodeCreateSchema>;
 type CheckinValidateInput = z.infer<typeof checkinValidateSchema>;
 
 const activitiesRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get("/activities", { preHandler: [authGuard] }, async (request) => {
+  fastify.get(
+    "/activities",
+    { preHandler: [authGuard, nonceGuard] },
+    async (request) => {
     const query = activityListQuerySchema.safeParse(request.query);
     if (!query.success) {
       throw fastify.httpErrors.badRequest("Invalid activity list query");
@@ -172,11 +180,70 @@ const activitiesRoutes: FastifyPluginAsync = async (fastify) => {
       page: query.data.page,
       limit: query.data.limit,
     };
-  });
+    },
+  );
+
+  fastify.get(
+    "/activities/search",
+    {
+      preHandler: [authGuard, nonceGuard],
+      ...searchRateLimitConfig,
+    },
+    async (request) => {
+      const query = activitySearchQuerySchema.safeParse(request.query);
+      if (!query.success) {
+        throw fastify.httpErrors.badRequest("Invalid activity search query");
+      }
+
+      const offset = (query.data.page - 1) * query.data.limit;
+      const wildcard = `%${query.data.q}%`;
+
+      const dataResult = await fastify.db.query<ActivityRow>(
+        `
+          SELECT
+            id,
+            title,
+            description,
+            participation_type,
+            starts_at,
+            ends_at,
+            registration_start_at,
+            registration_end_at,
+            created_by_user_id,
+            created_at,
+            updated_at
+          FROM app.activities
+          WHERE deleted_at IS NULL
+            AND (title ILIKE $1 OR COALESCE(description, '') ILIKE $1)
+          ORDER BY starts_at DESC, id DESC
+          LIMIT $2 OFFSET $3
+        `,
+        [wildcard, query.data.limit, offset],
+      );
+
+      const totalResult = await fastify.db.query<{ total: string }>(
+        `
+          SELECT COUNT(*)::text AS total
+          FROM app.activities
+          WHERE deleted_at IS NULL
+            AND (title ILIKE $1 OR COALESCE(description, '') ILIKE $1)
+        `,
+        [wildcard],
+      );
+
+      return {
+        data: dataResult.rows.map(mapActivity),
+        total: Number(totalResult.rows[0]?.total ?? "0"),
+        page: query.data.page,
+        limit: query.data.limit,
+        query: query.data.q,
+      };
+    },
+  );
 
   fastify.get(
     "/activities/:activityId",
-    { preHandler: [authGuard] },
+    { preHandler: [authGuard, nonceGuard] },
     async (request) => {
       const params = parseActivityIdParams(request.params, fastify);
       const result = await fastify.db.query<ActivityDetailRow>(
@@ -221,7 +288,13 @@ const activitiesRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get(
     "/activities/:activityId/registrations",
-    { preHandler: [authGuard] },
+    {
+      preHandler: [
+        authGuard,
+        roleGuard("program_owner", "admin", "reviewer"),
+        nonceGuard,
+      ],
+    },
     async (request) => {
       const params = parseActivityIdParams(request.params, fastify);
       const pagination = paginationSchema.safeParse(request.query);
@@ -607,12 +680,10 @@ const activitiesRoutes: FastifyPluginAsync = async (fastify) => {
             FROM app.activity_checkin_codes
             WHERE activity_id = $1
               AND code_hash = $2
-              AND used_at IS NULL
               AND revoked_at IS NULL
               AND expires_at > NOW()
             ORDER BY created_at DESC
             LIMIT 1
-            FOR UPDATE
           `,
           [params.activityId, codeHash],
         );
@@ -624,27 +695,20 @@ const activitiesRoutes: FastifyPluginAsync = async (fastify) => {
           );
         }
 
-        await client.query(
-          `
-            UPDATE app.activity_checkin_codes
-            SET used_at = NOW(),
-                used_by_user_id = $2
-            WHERE id = $1
-          `,
-          [code.id, request.auth.userId],
-        );
-
-        await client.query(
+        const insertedCheckin = await client.query<{ id: number }>(
           `
             INSERT INTO app.activity_checkins (activity_id, user_id, checkin_code_id)
             VALUES ($1, $2, $3)
             ON CONFLICT (activity_id, user_id)
-            DO UPDATE
-            SET checkin_code_id = EXCLUDED.checkin_code_id,
-                checked_in_at = NOW()
+            DO NOTHING
+            RETURNING id
           `,
           [params.activityId, request.auth.userId, code.id],
         );
+
+        if (!insertedCheckin.rows[0]) {
+          throw fastify.httpErrors.conflict("Participant has already checked in");
+        }
 
         await client.query("COMMIT");
         return { success: true };
