@@ -5,12 +5,12 @@ services:
     environment:
       POSTGRES_DB: eaglepoint
       POSTGRES_USER: app_user
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_postgres_password}
       ENABLE_SEED_ADMIN: ${ENABLE_SEED_ADMIN:-false}
       SEED_ADMIN_PASSWORD_HASH: ${SEED_ADMIN_PASSWORD_HASH:-}
     volumes:
       - type: bind
-        source: ${ENCRYPTED_POSTGRES_PATH:?Set ENCRYPTED_POSTGRES_PATH to an encrypted host directory}
+        source: ${ENCRYPTED_POSTGRES_PATH:-./storage/postgres}
         target: /var/lib/postgresql/data
       - ./database/sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
@@ -28,15 +28,15 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3000
-      DATABASE_URL: postgresql://app_user:${POSTGRES_PASSWORD}@database:5432/eaglepoint
+      DATABASE_URL: postgresql://app_user:${POSTGRES_PASSWORD:-dev_postgres_password}@database:5432/eaglepoint
       CORS_ORIGIN: https://${PUBLIC_HOSTNAME:-localhost}
-      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET to a 32+ character secret}
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_this_in_non_dev_env_32_chars_min}
     depends_on:
       database:
         condition: service_healthy
     volumes:
       - type: bind
-        source: ${ENCRYPTED_CMS_STORAGE_PATH:?Set ENCRYPTED_CMS_STORAGE_PATH to an encrypted host directory}
+        source: ${ENCRYPTED_CMS_STORAGE_PATH:-./storage/cms-private}
         target: /app/storage/private
 
   frontend:
@@ -61,5 +61,5 @@ services:
       - "80:80"
     volumes:
       - ./ops/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-      - ${TLS_CERT_PATH:?Set TLS_CERT_PATH to your TLS certificate file}:/etc/nginx/tls/server.crt:ro
-      - ${TLS_KEY_PATH:?Set TLS_KEY_PATH to your TLS private key file}:/etc/nginx/tls/server.key:ro
+      - ${TLS_CERT_PATH:-./ops/tls/dev/server.crt}:/etc/nginx/tls/server.crt:ro
+      - ${TLS_KEY_PATH:-./ops/tls/dev/server.key}:/etc/nginx/tls/server.key:ro
