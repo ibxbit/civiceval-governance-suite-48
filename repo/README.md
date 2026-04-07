@@ -1,5 +1,3 @@
-# Eaglepoint Platform
-
 Secure baseline uses TLS gateway (`https://localhost`) and encrypted bind mounts.
 
 ## Secure Startup
