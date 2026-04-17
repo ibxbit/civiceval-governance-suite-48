@@ -146,6 +146,117 @@ describe("activities routes", () => {
         return { rows: [{ total: "1" }] as T[] };
       }
 
+      if (text.includes("COUNT(*)::text AS total") && text.includes("app.activities")) {
+        return { rows: [{ total: "2" }] as T[] };
+      }
+
+      if (text.includes("FROM app.activities") && text.includes("WHERE deleted_at IS NULL") && text.includes("ORDER BY starts_at")) {
+        return {
+          rows: [
+            {
+              id: 1,
+              title: "Town Hall",
+              description: "Community updates",
+              participation_type: "individual",
+              starts_at: new Date("2099-01-10T10:00:00.000Z"),
+              ends_at: new Date("2099-01-10T11:00:00.000Z"),
+              registration_start_at: new Date("2099-01-01T10:00:00.000Z"),
+              registration_end_at: new Date("2099-01-05T10:00:00.000Z"),
+              created_by_user_id: 1,
+              created_at: new Date(),
+              updated_at: new Date(),
+            },
+            {
+              id: 2,
+              title: "Workshop",
+              description: "Skills session",
+              participation_type: "team",
+              starts_at: new Date("2099-02-10T10:00:00.000Z"),
+              ends_at: new Date("2099-02-10T11:00:00.000Z"),
+              registration_start_at: new Date("2099-02-01T10:00:00.000Z"),
+              registration_end_at: new Date("2099-02-05T10:00:00.000Z"),
+              created_by_user_id: 1,
+              created_at: new Date(),
+              updated_at: new Date(),
+            },
+          ] as T[],
+        };
+      }
+
+      if (text.includes("FROM app.activities a") && text.includes("WHERE a.id = $1") && text.includes("registration_count")) {
+        const activityId = Number(values?.[0]);
+        if (activityId === 999) {
+          return { rows: [] as T[] };
+        }
+        return {
+          rows: [
+            {
+              id: activityId,
+              title: "Town Hall",
+              description: "Community updates",
+              participation_type: "individual",
+              starts_at: new Date("2099-01-10T10:00:00.000Z"),
+              ends_at: new Date("2099-01-10T11:00:00.000Z"),
+              registration_start_at: new Date("2099-01-01T10:00:00.000Z"),
+              registration_end_at: new Date("2099-01-05T10:00:00.000Z"),
+              created_by_user_id: 1,
+              created_at: new Date(),
+              updated_at: new Date(),
+              registration_count: "5",
+            },
+          ] as T[],
+        };
+      }
+
+      if (text.includes("FROM app.activities") && text.includes("WHERE id = $1") && text.includes("deleted_at IS NULL") && text.includes("registration_start_at")) {
+        const activityId = Number(values?.[0]);
+        if (activityId === 999) {
+          return { rows: [] as T[] };
+        }
+        return {
+          rows: [
+            {
+              starts_at: new Date("2099-01-10T10:00:00.000Z"),
+              ends_at: new Date("2099-01-10T11:00:00.000Z"),
+              registration_start_at: new Date("2099-01-01T10:00:00.000Z"),
+              registration_end_at: new Date("2099-01-05T10:00:00.000Z"),
+            },
+          ] as T[],
+        };
+      }
+
+      if (text.includes("UPDATE app.activities") && text.includes("SET") && text.includes("title = COALESCE")) {
+        const activityId = Number(values?.[0]);
+        if (activityId === 999) {
+          return { rows: [] as T[] };
+        }
+        return {
+          rows: [
+            {
+              id: activityId,
+              title: values?.[1] ?? "Town Hall",
+              description: values?.[2] ?? "Community updates",
+              participation_type: values?.[3] ?? "individual",
+              starts_at: values?.[4] ?? new Date("2099-01-10T10:00:00.000Z"),
+              ends_at: values?.[5] ?? new Date("2099-01-10T11:00:00.000Z"),
+              registration_start_at: values?.[6] ?? new Date("2099-01-01T10:00:00.000Z"),
+              registration_end_at: values?.[7] ?? new Date("2099-01-05T10:00:00.000Z"),
+              created_by_user_id: 1,
+              created_at: new Date(),
+              updated_at: new Date(),
+            },
+          ] as T[],
+        };
+      }
+
+      if (text.includes("UPDATE app.activities") && text.includes("SET deleted_at")) {
+        const activityId = Number(values?.[0]);
+        if (activityId === 999) {
+          return { rows: [] as T[], rowCount: 0 };
+        }
+        return { rows: [] as T[], rowCount: 1 };
+      }
+
       return { rows: [] as T[] };
     };
 
@@ -221,6 +332,7 @@ describe("activities routes", () => {
       payload: {},
     });
     expect(response.statusCode).toBe(200);
+    expect(response.json().success).toBe(true);
   });
 
   it("checkin flow validates and rejects expired code", async () => {
@@ -344,5 +456,370 @@ describe("activities routes", () => {
       headers: headers(adminToken),
     });
     expect(allowed.statusCode).toBe(200);
+  });
+
+  it("get activity detail returns activity with registration count", async () => {
+    const { app } = await buildApp({ 1: "participant" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/activities/1",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.id).toBe(1);
+    expect(body.title).toBeTypeOf("string");
+    expect(body.participationType).toBe("individual");
+    expect(body.registrationCount).toBe(5);
+    expect(body.startsAt).toBeDefined();
+    expect(body.endsAt).toBeDefined();
+  });
+
+  it("get activity detail returns 404 for non-existent activity", async () => {
+    const { app } = await buildApp({ 1: "participant" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/activities/999",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("update activity succeeds for admin", async () => {
+    const { app } = await buildApp({ 1: "admin" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/activities/1",
+      headers: headers(token),
+      payload: { title: "Updated Town Hall" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.id).toBe(1);
+  });
+
+  it("update activity returns 404 for non-existent activity", async () => {
+    const { app } = await buildApp({ 1: "admin" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/activities/999",
+      headers: headers(token),
+      payload: { title: "Updated" },
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("update activity rejects empty body", async () => {
+    const { app } = await buildApp({ 1: "admin" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/activities/1",
+      headers: headers(token),
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("participant cannot update activities", async () => {
+    const { app } = await buildApp({ 1: "participant" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/activities/1",
+      headers: headers(token),
+      payload: { title: "Hacked" },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("delete activity succeeds for admin", async () => {
+    const { app } = await buildApp({ 1: "admin" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/api/activities/1",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().success).toBe(true);
+  });
+
+  it("delete activity returns 404 for non-existent activity", async () => {
+    const { app } = await buildApp({ 1: "admin" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/api/activities/999",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("participant cannot delete activities", async () => {
+    const { app } = await buildApp({ 1: "participant" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/api/activities/1",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("create activity response includes all expected fields", async () => {
+    const { app } = await buildApp({ 1: "admin" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/activities",
+      headers: headers(token),
+      payload: {
+        title: "Town Hall",
+        description: "B",
+        participationType: "individual",
+        startsAt: "2099-01-10T10:00:00.000Z",
+        endsAt: "2099-01-11T10:00:00.000Z",
+        registrationStartAt: "2099-01-01T10:00:00.000Z",
+        registrationEndAt: "2099-01-05T10:00:00.000Z",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.id).toBeTypeOf("number");
+    expect(body.title).toBeTypeOf("string");
+    expect(body.participationType).toBe("individual");
+    expect(body.createdByUserId).toBeTypeOf("number");
+    expect(body.createdAt).toBeDefined();
+    expect(body.updatedAt).toBeDefined();
+  });
+
+  it("search response includes query and pagination metadata", async () => {
+    const { app } = await buildApp({ 1: "participant" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/activities/search?q=town&page=1&limit=20",
+      headers: headers(token),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.query).toBe("town");
+    expect(body.page).toBe(1);
+    expect(body.limit).toBe(20);
+    expect(body.data).toBeInstanceOf(Array);
+  });
+
+  it("participant cannot create activities", async () => {
+    const { app } = await buildApp({ 1: "participant" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/activities",
+      headers: headers(token),
+      payload: {
+        title: "Unauthorized",
+        description: "B",
+        participationType: "individual",
+        startsAt: "2099-01-10T10:00:00.000Z",
+        endsAt: "2099-01-11T10:00:00.000Z",
+        registrationStartAt: "2099-01-01T10:00:00.000Z",
+        registrationEndAt: "2099-01-05T10:00:00.000Z",
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("unauthenticated activity list returns 401", async () => {
+    const { app } = await buildApp({});
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/activities?page=1&limit=20",
+      headers: {
+        "x-nonce": `nonce-${Math.random().toString(36).slice(2)}-1234567890`,
+        "x-timestamp": String(Date.now()),
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("rejects activity with registration end after activity start", async () => {
+    const { app } = await buildApp({ 1: "admin" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/activities",
+      headers: headers(token),
+      payload: {
+        title: "Bad Dates",
+        description: "B",
+        participationType: "individual",
+        startsAt: "2099-01-05T10:00:00.000Z",
+        endsAt: "2099-01-10T10:00:00.000Z",
+        registrationStartAt: "2099-01-01T10:00:00.000Z",
+        registrationEndAt: "2099-01-06T10:00:00.000Z",
+      },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("list activities returns paginated data with correct shape", async () => {
+    const { app } = await buildApp({ 1: "participant" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/activities?page=1&limit=20",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.data).toBeInstanceOf(Array);
+    expect(body.data.length).toBe(2);
+    expect(body.total).toBe(2);
+    expect(body.page).toBe(1);
+    expect(body.limit).toBe(20);
+
+    const first = body.data[0];
+    expect(first.id).toBeTypeOf("number");
+    expect(first.title).toBeTypeOf("string");
+    expect(first.participationType).toBeTypeOf("string");
+    expect(first.startsAt).toBeDefined();
+    expect(first.endsAt).toBeDefined();
+    expect(first.registrationStartAt).toBeDefined();
+    expect(first.registrationEndAt).toBeDefined();
+    expect(first.createdByUserId).toBeTypeOf("number");
+  });
+
+  it("list activities supports status filter parameter", async () => {
+    const { app } = await buildApp({ 1: "participant" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/activities?page=1&limit=20&status=upcoming",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toBeInstanceOf(Array);
+  });
+
+  it("checkin flow success response confirms success", async () => {
+    const { app } = await buildApp({
+      1: "admin",
+      2: "participant",
+    });
+    const adminToken = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+    const participantToken = app.jwt.sign({ sub: "2", sid: 2, tid: "t2" });
+
+    const generated = await app.inject({
+      method: "POST",
+      url: "/api/activities/1/checkin-code",
+      headers: headers(adminToken),
+      payload: { expiresInSeconds: 120 },
+    });
+    expect(generated.statusCode).toBe(200);
+    const genBody = generated.json();
+    expect(genBody.checkinCodeId).toBeTypeOf("number");
+    expect(genBody.code).toBeTypeOf("string");
+    expect(genBody.code).toHaveLength(8);
+    expect(genBody.expiresInSeconds).toBe(120);
+
+    const valid = await app.inject({
+      method: "POST",
+      url: "/api/activities/1/checkin",
+      headers: headers(participantToken),
+      payload: { code: "ABCDEFG1" },
+    });
+    expect(valid.statusCode).toBe(200);
+    expect(valid.json().success).toBe(true);
+  });
+
+  it("registration success response confirms success", async () => {
+    const { app } = await buildApp({ 1: "participant" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/activities/1/register",
+      headers: headers(token),
+      payload: {},
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().success).toBe(true);
+  });
+
+  it("registrations list returns paginated roster with masked usernames", async () => {
+    const { app } = await buildApp({ 1: "admin" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/activities/1/registrations?page=1&limit=20",
+      headers: headers(token),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.data).toBeInstanceOf(Array);
+    expect(body.data.length).toBeGreaterThan(0);
+    expect(body.data[0].userId).toBeTypeOf("number");
+    expect(body.data[0].username).toBeTypeOf("string");
+    expect(body.total).toBeTypeOf("number");
+    expect(body.page).toBe(1);
+  });
+
+  it("activity detail response includes description field", async () => {
+    const { app } = await buildApp({ 1: "participant" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/activities/1",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const descriptionIsStringOrNull =
+      body.description === null || typeof body.description === "string";
+    expect(descriptionIsStringOrNull).toBe(true);
+  });
+
+  it("search rejects missing query parameter", async () => {
+    const { app } = await buildApp({ 1: "participant" });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/activities/search?page=1&limit=20",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(400);
   });
 });

@@ -4,6 +4,6 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
-    include: ["unit_tests/**/*.test.ts", "API_tests/**/*.test.ts"],
+    include: ["unit_tests/**/*.test.ts", "API_tests/**/*.test.ts", "integration_tests/**/*.test.ts", "no_mock_tests/**/*.test.ts"],
   },
 });

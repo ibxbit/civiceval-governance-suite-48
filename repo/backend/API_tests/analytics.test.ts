@@ -118,6 +118,7 @@ describe("analytics routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
+    expect(response.json().success).toBe(true);
   });
 
   it("rejects dwell events without dwellMs", async () => {
@@ -180,6 +181,173 @@ describe("analytics routes", () => {
       method: "GET",
       url: "/api/analytics/summary?startDate=2026-01-01&endDate=2026-01-02",
       headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("summary response includes expected aggregate fields", async () => {
+    const app = await buildApp("program_owner");
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/analytics/summary?startDate=2026-01-01&endDate=2026-01-02",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.pageViews).toBeTypeOf("number");
+    expect(body.uniqueUsers).toBeTypeOf("number");
+    expect(body.avgDwellMs).toBeTypeOf("number");
+    expect(body.totalDwellMs).toBeTypeOf("number");
+    expect(body.readCompletionRate).toBeTypeOf("number");
+    expect(body.searchConversion).toBeTypeOf("number");
+    expect(body.contentPopularity).toBeInstanceOf(Array);
+    expect(body.trafficSources).toBeInstanceOf(Array);
+  });
+
+  it("export returns CSV content type", async () => {
+    const app = await buildApp("program_owner");
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/analytics/export.csv?startDate=2026-01-01&endDate=2026-01-02",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/csv");
+  });
+
+  it("event ingestion response confirms success", async () => {
+    const app = await buildApp("participant");
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/analytics/events",
+      headers: headers(token),
+      payload: {
+        eventType: "page_view",
+        pagePath: "/dashboard",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().success).toBe(true);
+  });
+
+  it("rejects invalid event type", async () => {
+    const app = await buildApp("participant");
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/analytics/events",
+      headers: headers(token),
+      payload: {
+        eventType: "invalid_type",
+        pagePath: "/dashboard",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("unauthenticated event ingestion returns 401", async () => {
+    const app = await buildApp("participant");
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/analytics/events",
+      headers: {
+        "x-nonce": `nonce-${Math.random().toString(36).slice(2)}-1234567890`,
+        "x-timestamp": String(Date.now()),
+      },
+      payload: {
+        eventType: "page_view",
+        pagePath: "/dashboard",
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("event ingestion for dwell type includes dwellMs in response", async () => {
+    const app = await buildApp("participant");
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/analytics/events",
+      headers: headers(token),
+      payload: {
+        eventType: "dwell",
+        pagePath: "/activities",
+        dwellMs: 500,
+        contentId: 10,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().success).toBe(true);
+  });
+
+  it("summary response includes contentPopularity and trafficSources arrays", async () => {
+    const app = await buildApp("program_owner");
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/analytics/summary?startDate=2026-01-01&endDate=2026-01-02",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.contentPopularity).toBeInstanceOf(Array);
+    expect(body.contentPopularity.length).toBeGreaterThan(0);
+    expect(body.contentPopularity[0]).toHaveProperty("contentId");
+    expect(body.contentPopularity[0]).toHaveProperty("views");
+    expect(typeof body.contentPopularity[0].contentId).toBe("number");
+    expect(typeof body.contentPopularity[0].views).toBe("number");
+
+    expect(body.trafficSources).toBeInstanceOf(Array);
+    expect(body.trafficSources.length).toBeGreaterThan(0);
+    expect(body.trafficSources[0]).toHaveProperty("referrer");
+    expect(body.trafficSources[0]).toHaveProperty("visits");
+    expect(typeof body.trafficSources[0].referrer).toBe("string");
+    expect(typeof body.trafficSources[0].visits).toBe("number");
+  });
+
+  it("export CSV body contains expected column headers", async () => {
+    const app = await buildApp("program_owner");
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/analytics/export.csv?startDate=2026-01-01&endDate=2026-01-02",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const csv = response.body;
+    expect(csv).toContain("date,page_views,unique_users,avg_dwell_ms,total_dwell_ms");
+    const lines = csv.split("\n").filter((line: string) => line.trim().length > 0);
+    expect(lines.length).toBeGreaterThan(1);
+  });
+
+  it("summary rejects startDate after endDate", async () => {
+    const app = await buildApp("program_owner");
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/analytics/summary?startDate=2026-01-10&endDate=2026-01-01",
+      headers: headers(token),
     });
 
     expect(response.statusCode).toBe(400);

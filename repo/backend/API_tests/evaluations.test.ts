@@ -59,6 +59,25 @@ describe("evaluation routes", () => {
       }
 
       if (text.includes("FROM app.evaluation_forms") && text.includes("WHERE id")) {
+        const requestedId = Number(values?.[0]);
+        if (requestedId === 999) {
+          return { rows: [] as T[] };
+        }
+        if (requestedId === 888) {
+          return {
+            rows: [
+              {
+                id: 888,
+                activity_id: null,
+                title: "Inactive Form",
+                description: null,
+                is_active: false,
+                created_by_user_id: 1,
+                created_at: new Date(),
+              },
+            ] as T[],
+          };
+        }
         return {
           rows: [
             {
@@ -222,5 +241,204 @@ describe("evaluation routes", () => {
     });
 
     expect(response.statusCode).toBe(400);
+  });
+
+  it("get form detail returns form with questions", async () => {
+    const app = await buildApp({ 1: { userId: 1, role: "participant" } });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/evaluations/forms/1",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.id).toBeTypeOf("number");
+    expect(body.title).toBe("Form");
+    expect(body.questions).toBeInstanceOf(Array);
+    expect(body.questions.length).toBeGreaterThan(0);
+    expect(body.questions[0].prompt).toBeTypeOf("string");
+    expect(body.questions[0].type).toBe("numeric_scale");
+    expect(body.questions[0].required).toBeTypeOf("boolean");
+    expect(body.questions[0].order).toBeTypeOf("number");
+  });
+
+  it("get form detail returns 404 for non-existent form", async () => {
+    const app = await buildApp({ 1: { userId: 1, role: "participant" } });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/evaluations/forms/999",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("get form detail returns 404 for inactive form", async () => {
+    const app = await buildApp({ 1: { userId: 1, role: "participant" } });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/evaluations/forms/888",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("submission response includes receipt id and timestamp", async () => {
+    const app = await buildApp({ 1: { userId: 1, role: "participant" } });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/evaluations/forms/1/submissions",
+      headers: headers(token),
+      payload: { responses: [{ questionId: 11, numericValue: 4 }] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.submissionId).toBeTypeOf("number");
+    expect(body.receiptId).toBeTypeOf("string");
+    expect(body.receiptId).toMatch(/^EVR-/);
+    expect(body.submittedAt).toBeDefined();
+  });
+
+  it("submission rejects invalid numeric value out of range", async () => {
+    const app = await buildApp({ 1: { userId: 1, role: "participant" } });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/evaluations/forms/1/submissions",
+      headers: headers(token),
+      payload: { responses: [{ questionId: 11, numericValue: 10 }] },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("participant cannot create evaluation forms", async () => {
+    const app = await buildApp({ 1: { userId: 1, role: "participant" } });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/evaluations/forms",
+      headers: headers(token),
+      payload: {
+        title: "Form",
+        questions: [{ prompt: "Rate it", type: "numeric_scale", required: true }],
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("create form response includes expected fields", async () => {
+    const app = await buildApp({ 1: { userId: 1, role: "program_owner" } });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/evaluations/forms",
+      headers: headers(token),
+      payload: {
+        title: "Survey",
+        questions: [{ prompt: "How was it?", type: "numeric_scale", required: true }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.id).toBeTypeOf("number");
+    expect(body.title).toBe("Form");
+    expect(body.isActive).toBe(true);
+    expect(body.createdByUserId).toBeTypeOf("number");
+    expect(body.createdAt).toBeDefined();
+  });
+
+  it("submission rejects non-existent form", async () => {
+    const app = await buildApp({ 1: { userId: 1, role: "participant" } });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/evaluations/forms/999/submissions",
+      headers: headers(token),
+      payload: { responses: [{ questionId: 11, numericValue: 3 }] },
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("submission receipt lookup returns 404 for non-existent receipt", async () => {
+    const app = await buildApp({ 1: { userId: 1, role: "participant" } });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/evaluations/submissions/EVR-NONEXISTENT-0000",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("unauthenticated form list returns 401", async () => {
+    const app = await buildApp({});
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/evaluations/forms?page=1&limit=20",
+      headers: {
+        "x-nonce": `nonce-${Math.random().toString(36).slice(2)}-1234567890`,
+        "x-timestamp": String(Date.now()),
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("submission rejects duplicate question responses", async () => {
+    const app = await buildApp({ 1: { userId: 1, role: "participant" } });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/evaluations/forms/1/submissions",
+      headers: headers(token),
+      payload: {
+        responses: [
+          { questionId: 11, numericValue: 3 },
+          { questionId: 11, numericValue: 4 },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("receipt lookup response includes formId and submittedAt", async () => {
+    const app = await buildApp({
+      1: { userId: 1, role: "participant" },
+    });
+    const token = app.jwt.sign({ sub: "1", sid: 1, tid: "t1" });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/evaluations/submissions/EVR-OWNER-1001",
+      headers: headers(token),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(typeof body.formId).toBe("number");
+    expect(body.submittedAt).toBeDefined();
   });
 });
